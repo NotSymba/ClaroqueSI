@@ -80,9 +80,7 @@ shadowJar {
         println("You can run your application with: java -jar build/libs/jason-${project.name}-all.jar")
     }
 
-        tasks.named('compileJava') {
-    dependsOn 'processResources'
-}
+    
 }
 
 // Clean task
