@@ -1,0 +1,37 @@
+# Jason/Java build artifacts
+bin/
+build/
+*.class
+*.jar
+!jason.jar
+
+# IDE specific files
+.vscode/
+.idea/
+*.iml
+.project
+.classpath
+.settings/
+
+# OS specific
+.DS_Store
+Thumbs.db
+*~
+
+# Logs
+*.log
+
+# Jason specific
+*~
+*.bak
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Gradle
+.gradle/
+
+# Generated files
+.jason/
