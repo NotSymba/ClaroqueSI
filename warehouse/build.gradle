@@ -1,0 +1,92 @@
+/*
+   Warehouse Management System - Jason Application
+   Gradle build file
+*/
+
+plugins {
+    id 'com.gradleup.shadow' version '8.3.3'
+    id 'java'
+}
+
+defaultTasks 'run'
+
+version '1.0'
+group 'warehouse'
+
+repositories {
+    mavenCentral()
+    maven { url "https://raw.githubusercontent.com/jacamo-lang/mvn-repo/master" }
+}
+
+dependencies {
+    implementation 'io.github.jason-lang:jason-interpreter:3.3.0'
+    
+    // to use locally installed jars:
+    implementation fileTree(dir: 'lib', include: '*.jar')
+}
+
+sourceSets {
+    main {
+        java {
+            srcDir 'src/env'
+            srcDir 'src/java'
+        }
+        resources {
+            srcDir 'src/resources'
+            srcDir 'src/agt'
+        }
+    }
+}
+
+task run (type: JavaExec, dependsOn: 'classes') {
+    group = 'Jason'
+    description 'runs the warehouse application'
+    mainClass = 'jason.infra.local.RunLocalMAS'
+    args = ['warehouse.mas2j']
+    classpath sourceSets.main.runtimeClasspath
+}
+
+shadowJar {
+    doFirst {
+        copy {
+            from 'warehouse.mas2j'
+            rename 'warehouse.mas2j','default.mas2j'
+            into project.projectDir.absolutePath + '/'
+        }
+    }
+    archiveFileName = "jason-${project.name}-all.jar"
+    from (project.projectDir.absolutePath + '/src') {
+        include '**/*.asl'
+        include '**/*.xml'
+        include '**/*.sai'
+        include '**/*.ptl'
+        include '**/*.jcm'
+        include '*.properties'
+        exclude 'test'
+    }
+    from (project.buildDir.absolutePath + '/classes') {
+        include '**/*'
+    }
+    from (project.projectDir.absolutePath + '/') {
+        include '*.properties'
+        include 'default.mas2j'
+    }
+
+    manifest {
+        attributes 'Main-Class': 'jason.infra.local.RunLocalMAS'
+    }
+
+    doLast {
+        println("You can run your application with: java -jar build/libs/jason-${project.name}-all.jar")
+    }
+
+        tasks.named('compileJava') {
+    dependsOn 'processResources'
+}
+}
+
+// Clean task
+clean {
+    delete 'bin'
+    delete 'default.mas2j'
+}

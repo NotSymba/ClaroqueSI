@@ -1,0 +1,17 @@
+/home/user/escuela/SI/PROYECTO/warehouse/src/env/warehouse/WarehouseArtifact.java:877: error: illegal start of expression
+        if (cell == CellType.BLOCKED || /*cell == CellType.SHELF*/) {
+                                                                  ^
+1 error
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':compileJava'.
+> Compilation failed; see the compiler error output for details.
+
+* Try:
+> Run with --info option to get more log output.
+> Run with --scan to get full insights.
+
+BUILD FAILED in 976ms
+Error running 'gradle run'

@@ -1,0 +1,26 @@
+/*
+ * Sistema Multiagente para Gestión Logística Inteligente de un Almacén Automatizado
+ * Proyecto para la asignatura de Sistemas Inteligentes
+ * Universidad de Vigo - Curso 2025-2026
+ */
+
+MAS warehouse {
+
+    infrastructure: Centralised
+
+    environment: warehouse.WarehouseArtifact
+
+    agents:
+        // Agentes reponedores - uno de cada tipo
+        robot_light [beliefs="robot_type(light)", beliefs="max_weight(10)", beliefs="max_size(1,1)"];
+        robot_medium [beliefs="robot_type(medium)", beliefs="max_weight(30)", beliefs="max_size(1,2)"];
+        robot_heavy [beliefs="robot_type(heavy)", beliefs="max_weight(100)", beliefs="max_size(2,3)"];
+        
+        // Agente planificador/scheduler
+        scheduler;
+        
+        // Agente supervisor de errores y monitorización
+        supervisor;
+
+    aslSourcePath: "src/agt";
+}
