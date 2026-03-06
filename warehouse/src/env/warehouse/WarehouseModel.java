@@ -157,7 +157,7 @@ public class WarehouseModel extends GridWorldModel {
      * Inicia el generador automático de contenedores
      */
     public Container newContainer() {
-        Container container = generateRandomContainer();
+        Container container = generateRandomContainerFair();
         containers.put(container.getId(), container);
         pendingContainers.offer(container);
 
@@ -174,34 +174,6 @@ public class WarehouseModel extends GridWorldModel {
     /**
      * Genera un contenedor aleatorio
      */
-    private Container generateRandomContainer() {
-        Random rand = new Random();
-        String id = "container_" + (++containerCounter);
-
-        // Tamaños posibles: 1x1, 1x2, 2x2, 2x3
-        int[][] sizes = {{1, 1}/*, {1,2}, {2,2}, {2,3}*/};
-        int[] size = sizes[rand.nextInt(sizes.length)];
-
-        // Peso aleatorio
-        double weight = 5 + rand.nextDouble() * 95; // 5 a 100 kg
-
-        // Tipo: standard (70%), fragile (15%), urgent (15%)
-        String type;
-        double r = rand.nextDouble();
-        if (r < 0.70) {
-            type = "standard";
-        } else if (r < 0.85) {
-            type = "fragile";
-        } else {
-            type = "urgent";
-        }
-
-        Container container = new Container(id, size[0], size[1], weight, type);
-        container.setPosition(1, 1); // Posición inicial en zona de entrada
-
-        return container;
-    }
-
     public boolean taskComplete(String agName, Structure action) {
 
         String containerId = action.getTerm(0).toString().replace("\"", "");
@@ -616,7 +588,7 @@ public class WarehouseModel extends GridWorldModel {
         }
 
         CellType cell = grid[x][y];
-        if (cell == CellType.BLOCKED || cell == CellType.SHELF ) {
+        if (cell == CellType.BLOCKED || cell == CellType.SHELF) {
             return false;
         }
 
@@ -751,7 +723,6 @@ public class WarehouseModel extends GridWorldModel {
     }
     //funcion auxiliar llamada desde el artifact para saber si el robot es adyacente a una estateria
 
-    
     public boolean isAdjacentToShelf(String robotID, String shelfID) {
         Robot robot = robots.get(robotID);
         Shelf shelf = shelves.get(shelfID);
@@ -789,5 +760,183 @@ public class WarehouseModel extends GridWorldModel {
         }
 
         return false;
-    }    
+    }
+
+    //*******************************************************************************************************/
+    //funciones de generacion de cajas aleatoria dada, se implementara una donde el trabajo se reparta de fornma justa
+    private Container generateRandomContainerUnfair() {
+        Random rand = new Random();
+        String id = "container_" + (++containerCounter);
+
+        // Tamaños posibles: 1x1, 1x2, 2x2, 2x3
+        int[][] sizes = {{1, 1}, {1, 2}, {2, 2}, {2, 3}};
+        int[] size = sizes[rand.nextInt(sizes.length)];
+
+        // Peso aleatorio
+        double weight = 5 + rand.nextDouble() * 95; // 5 a 100 kg
+
+        // Tipo: standard (70%), fragile (15%), urgent (15%)
+        String type;
+        double r = rand.nextDouble();
+        if (r < 0.70) {
+            type = "standard";
+        } else if (r < 0.85) {
+            type = "fragile";
+        } else {
+            type = "urgent";
+        }
+
+        Container container = new Container(id, size[0], size[1], weight, type);
+        container.setPosition(1, 1); // Posición inicial en zona de entrada
+
+        return container;
+    }
+
+    //solo genera cajas pequeñas y ligeras para probar el sistema con el robot light, se puede cambiar a la función anterior para generar cajas de forma más variada
+    private Container generateLightContainer() {
+        Random rand = new Random();
+        String id = "container_" + (++containerCounter);
+
+        // Tamaños posibles: 1x1, 1x2, 2x2, 2x3
+        int[][] sizes = {{1, 1}};
+        int[] size = sizes[rand.nextInt(sizes.length)];
+
+        // Peso aleatorio
+        double weight = 5;// 5 a 100 kg
+
+        // Tipo: standard (70%), fragile (15%), urgent (15%)
+        String type;
+        double r = rand.nextDouble();
+        if (r < 0.70) {
+            type = "standard";
+        } else if (r < 0.85) {
+            type = "fragile";
+        } else {
+            type = "urgent";
+        }
+
+        Container container = new Container(id, size[0], size[1], weight, type);
+        container.setPosition(1, 1); // Posición inicial en zona de entrada
+
+        return container;
+    }
+//solo genera cajas grandes y pesadas para probar el sistema con el robot heavy, se puede cambiar a la función anterior para generar cajas de forma más variada
+
+    private Container generateMediumContainer() {
+        Random rand = new Random();
+        String id = "container_" + (++containerCounter);
+
+        // Tamaños posibles: 1x1, 1x2, 2x2, 2x3
+        int[][] sizes = {{1, 2}};
+        int[] size = sizes[rand.nextInt(sizes.length)];
+
+        // Peso aleatorio
+        double weight = 28;// 5 a 100 kg
+
+        // Tipo: standard (70%), fragile (15%), urgent (15%)
+        String type;
+        double r = rand.nextDouble();
+        if (r < 0.70) {
+            type = "standard";
+        } else if (r < 0.85) {
+            type = "fragile";
+        } else {
+            type = "urgent";
+        }
+
+        Container container = new Container(id, size[0], size[1], weight, type);
+        container.setPosition(1, 1); // Posición inicial en zona de entrada
+
+        return container;
+    }
+
+    //solo genera cajas grandes y pesadas para probar el sistema con el robot heavy, se puede cambiar a la función anterior para generar cajas de forma más variada
+    private Container generateHeavyContainer() {
+        Random rand = new Random();
+        String id = "container_" + (++containerCounter);
+
+        // Tamaños posibles: 1x1, 1x2, 2x2, 2x3
+        int[][] sizes = {{2, 2}, {2, 3}};
+        int[] size = sizes[rand.nextInt(sizes.length)];
+
+        // Peso aleatorio
+        double weight = 95;// 5 a 100 kg
+
+        // Tipo: standard (70%), fragile (15%), urgent (15%)
+        String type;
+        double r = rand.nextDouble();
+        if (r < 0.70) {
+            type = "standard";
+        } else if (r < 0.85) {
+            type = "fragile";
+        } else {
+            type = "urgent";
+        }
+
+        Container container = new Container(id, size[0], size[1], weight, type);
+        container.setPosition(1, 1); // Posición inicial en zona de entrada
+
+        return container;
+    }
+
+    private Container generateRandomContainerFair() {
+
+        Random rand = new Random();
+        String id = "container_" + (++containerCounter);
+
+        int width;
+        int height;
+        double weight;
+
+        double category = rand.nextDouble();
+
+        // 33% -> cajas pequeñas
+        if (category < 0.33) {
+
+            int[][] sizes = {{1, 1}};
+            int[] size = sizes[rand.nextInt(sizes.length)];
+
+            width = size[0];
+            height = size[1];
+
+            weight = 5 + rand.nextDouble() * 5; // <=10 kg
+        } // 33% -> cajas medianas
+        else if (category < 0.66) {
+
+            int[][] sizes = {{1, 1}, {1, 2}};
+            int[] size = sizes[rand.nextInt(sizes.length)];
+
+            width = size[0];
+            height = size[1];
+
+            weight = 10 + rand.nextDouble() * 20; // <=30 kg
+        } // 33% -> cajas grandes
+        else {
+
+            int[][] sizes = {{1, 1}, {1, 2}, {2, 2}, {2, 3}};
+            int[] size = sizes[rand.nextInt(sizes.length)];
+
+            width = size[0];
+            height = size[1];
+
+            weight = 30 + rand.nextDouble() * 70; // <=100 kg
+        }
+
+        // Tipo: standard (70%), fragile (15%), urgent (15%)
+        String type;
+        double r = rand.nextDouble();
+
+        if (r < 0.70) {
+            type = "standard";
+        } else if (r < 0.85) {
+            type = "fragile";
+        } else {
+            type = "urgent";
+        }
+
+        Container container = new Container(id, width, height, weight, type);
+        container.setPosition(1, 1);
+
+        return container;
+    }
 }
