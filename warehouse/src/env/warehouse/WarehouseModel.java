@@ -248,8 +248,8 @@ public class WarehouseModel extends GridWorldModel {
                 return 2;
             }
 //**************************************************************************************************** */
-            // Verificar distancia a la estantería esto no funciona
-            if (robot.distanceTo(shelf.getX(), shelf.getY()) > 2) {
+            // tapirico
+            if (!isAdjacentToShelf(agName, shelfId)) {
                 return 3;
             }
 //**************************************************************************************************** */
@@ -878,7 +878,7 @@ public class WarehouseModel extends GridWorldModel {
 
         return container;
     }
-
+//generacion justa de contenedores que hara que todos los robots tengan tareas acordes a sus capacidades, para probar el sistema con una carga de trabajo equilibrada, se puede cambiar a la función anterior para generar cajas de forma más variada y menos justa
     private Container generateRandomContainerFair() {
 
         Random rand = new Random();
