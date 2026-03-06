@@ -30,7 +30,6 @@ public class WarehouseModel extends GridWorldModel {
     private Map<String, String> taskAssignments; // containerId -> robotId
 
     // GUI visual
-
     // Contadores para generar IDs
     private int containerCounter = 0;
 
@@ -45,7 +44,7 @@ public class WarehouseModel extends GridWorldModel {
 
     public WarehouseModel() {
         super(GRID_WIDTH, GRID_HEIGHT, 3);
-       
+
         // Inicializar estructuras
         grid = new CellType[GRID_WIDTH][GRID_HEIGHT];
         robots = new ConcurrentHashMap<>();
@@ -71,7 +70,7 @@ public class WarehouseModel extends GridWorldModel {
         System.out.println("Shelves: " + shelves.size());
 
     }
-    
+
     /**
      * Inicializa el grid con zonas
      */
@@ -165,9 +164,6 @@ public class WarehouseModel extends GridWorldModel {
         System.out.println("New container generated: " + container);
 
         // Log a la consola de la GUI
-
-
-  
         return container;
 
     }
@@ -224,13 +220,11 @@ public class WarehouseModel extends GridWorldModel {
         taskAssignments.remove(containerId, agName);
 
         // Log a la consola de la GUI
-
         return true;
     }
 
     public int moveTo(String agName, Structure action) {
         try {
-           
 
             Robot robot = robots.get(agName);
             String destination = action.getTerm(0).toString();
@@ -238,8 +232,10 @@ public class WarehouseModel extends GridWorldModel {
             Location destLoc = getLocation(destination);
             Location currentLoc = new Location(robots.get(agName).getX(), robots.get(agName).getY());
 
+            if (currentLoc.equals(destLoc)) {
+                return 0; // Ya está en el destino
+            }
             if (destLoc == null) {
-
                 return 1;
             }
 
@@ -299,7 +295,6 @@ public class WarehouseModel extends GridWorldModel {
 
             totalContainersProcessed++;
 
-
             return 0;
 
         } catch (Exception e) {
@@ -336,8 +331,6 @@ public class WarehouseModel extends GridWorldModel {
             robot.pickup(container);
             container.setPicked(true);
 
-            
-
             return 0;
 
         } catch (Exception e) {
@@ -345,7 +338,8 @@ public class WarehouseModel extends GridWorldModel {
             return 4;
         }
     }
-/* NO LO VAMOS A USAR
+
+    /* NO LO VAMOS A USAR
     private boolean scanSurroundings(String agName, Structure action) {
         try {
             Robot robot = robots.get(agName);
@@ -382,8 +376,7 @@ public class WarehouseModel extends GridWorldModel {
             return false;
         }
     }
-        */
-
+     */
     public Literal getFreeShelf(String agName, Structure action) {
         try {
             String containerId = action.getTerm(0).toString().replace("\"", "");
@@ -408,7 +401,7 @@ public class WarehouseModel extends GridWorldModel {
         }
     }
 
-    public  Literal getContainerInfo(String agName, Structure action) {
+    public Literal getContainerInfo(String agName, Structure action) {
         try {
             String containerId = action.getTerm(0).toString().replace("\"", "");
             Container container = containers.get(containerId);
@@ -499,34 +492,34 @@ public class WarehouseModel extends GridWorldModel {
     }
 
     //funcion auxiliar para obtener una clase ubicacion a partir de un string
-    private Location getLocation(String location) {
+    public Location getLocation(String location) {
         switch (location) {
-            case "shelf1":
-                return new Location(shelves.get("shelf_1").getX(), shelves.get("shelf_1").getY());
-            case "shelf2":
-                return new Location(shelves.get("shelf_2").getX(), shelves.get("shelf_2").getY());
-            case "shelf3":
-                return new Location(shelves.get("shelf_3").getX(), shelves.get("shelf_3").getY());
-            case "shelf4":
-                return new Location(shelves.get("shelf_4").getX(), shelves.get("shelf_4").getY());
-            case "shelf5":
-                return new Location(shelves.get("shelf_5").getX(), shelves.get("shelf_5").getY());
-            case "shelf6":
-                return new Location(shelves.get("shelf_6").getX(), shelves.get("shelf_6").getY());
-            case "shelf7":
-                return new Location(shelves.get("shelf_7").getX(), shelves.get("shelf_7").getY());
-            case "shelf8":
-                return new Location(shelves.get("shelf_8").getX(), shelves.get("shelf_8").getY());
-            case "shelf9":
-                return new Location(shelves.get("shelf_9").getX(), shelves.get("shelf_9").getY());
+            case "shelf_1":
+                return findShelfMiddlePoint(shelves.get("shelf_1"));
+            case "shelf_2":
+                return findShelfMiddlePoint(shelves.get("shelf_2"));
+            case "shelf_3":
+                return findShelfMiddlePoint(shelves.get("shelf_3"));
+            case "shelf_4":
+                return findShelfMiddlePoint(shelves.get("shelf_4"));
+            case "shelf_5":
+                return findShelfMiddlePoint(shelves.get("shelf_5"));
+            case "shelf_6":
+                return findShelfMiddlePoint(shelves.get("shelf_6"));
+            case "shelf_7":
+                return findShelfMiddlePoint(shelves.get("shelf_7"));
+            case "shelf_8":
+                return findShelfMiddlePoint(shelves.get("shelf_8"));
+            case "shelf_9":
+                return findShelfMiddlePoint(shelves.get("shelf_9"));
             case "entrance":
                 return new Location(1, 1);
             case "lightInit":
-                return new Location(9, 3);
+                return new Location(0, 5);
             case "mediumInit":
-                return new Location(4, 3);
+                return new Location(1, 5);
             case "heavyInit":
-                return new Location(5, 3);
+                return new Location(2, 5);
             default:
                 return null;
         }
@@ -535,10 +528,20 @@ public class WarehouseModel extends GridWorldModel {
 
     private Location findNextStep(String agName, Location dest, Location current) {
 
-        List<Nodo> camino = this.A_star(agName, current, dest);
+        Location realDest = dest;
+
+        if (!canMoveTo(agName, dest.getX(), dest.getY())) {
+            realDest = getNearestFreeCell(dest);
+        }
+
+        if (realDest == null) {
+            return null;
+        }
+
+        List<Nodo> camino = this.A_star(agName, current, realDest);
 
         if (camino == null || camino.size() < 2) {
-             return null;
+            return null;
         }
 
         return camino.get(1).getLoc();
@@ -613,7 +616,7 @@ public class WarehouseModel extends GridWorldModel {
         }
 
         CellType cell = grid[x][y];
-        if (cell == CellType.BLOCKED /*|| cell == CellType.SHELF*/) {
+        if (cell == CellType.BLOCKED || cell == CellType.SHELF ) {
             return false;
         }
 
@@ -693,4 +696,98 @@ public class WarehouseModel extends GridWorldModel {
     public int getTotalErrors() {
         return totalErrors;
     }
+
+    private Location findShelfMiddlePoint(Shelf shelf) {
+        int midX = shelf.getX() + shelf.getWidth() / 2;
+        int midY = shelf.getY() + shelf.getHeight() / 2;
+        return new Location(midX, midY);
+    }
+
+    //la casilla libre mas cercana a la estantería, para que el robot se acerque lo máximo posible aunque no pueda llegar a la casilla central  
+    private Location getNearestFreeCell(Location dest) {
+
+        if (canMoveTo("", dest.getX(), dest.getY())) {
+            return dest;
+        }
+
+        Queue<Location> queue = new LinkedList<>();
+        Set<Location> visited = new HashSet<>();
+
+        queue.add(dest);
+        visited.add(dest);
+
+        int[][] dirs = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+
+        while (!queue.isEmpty()) {
+
+            Location current = queue.poll();
+
+            for (int[] d : dirs) {
+
+                int nx = current.getX() + d[0];
+                int ny = current.getY() + d[1];
+
+                Location next = new Location(nx, ny);
+
+                if (visited.contains(next)) {
+                    continue;
+                }
+
+                visited.add(next);
+
+                if (nx < 0 || nx >= GRID_WIDTH || ny < 0 || ny >= GRID_HEIGHT) {
+                    continue;
+                }
+
+                if (canMoveTo("", nx, ny)) {
+                    return next;
+                }
+
+                queue.add(next);
+            }
+        }
+
+        return null;
+    }
+    //funcion auxiliar llamada desde el artifact para saber si el robot es adyacente a una estateria
+
+    
+    public boolean isAdjacentToShelf(String robotID, String shelfID) {
+        Robot robot = robots.get(robotID);
+        Shelf shelf = shelves.get(shelfID);
+        int rx = robot.getX();
+        int ry = robot.getY();
+
+        int sx = shelf.getX();
+        int sy = shelf.getY();
+        int sw = shelf.getWidth();
+        int sh = shelf.getHeight();
+
+        int minX = sx;
+        int maxX = sx + sw - 1;
+        int minY = sy;
+        int maxY = sy + sh - 1;
+
+        // izquierda
+        if (rx == minX - 1 && ry >= minY && ry <= maxY) {
+            return true;
+        }
+
+        // derecha
+        if (rx == maxX + 1 && ry >= minY && ry <= maxY) {
+            return true;
+        }
+
+        // arriba
+        if (ry == minY - 1 && rx >= minX && rx <= maxX) {
+            return true;
+        }
+
+        // abajo
+        if (ry == maxY + 1 && rx >= minX && rx <= maxX) {
+            return true;
+        }
+
+        return false;
+    }    
 }

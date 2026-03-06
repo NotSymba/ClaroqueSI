@@ -185,38 +185,42 @@ public class WarehouseArtifact extends Environment {
      * Acción: move_to(X, Y) Mueve el robot a la posición especificada
      */
     private boolean executeMoveTo(String agName, Structure action) {
-        int error = model.moveTo(agName, action);
-        String destination = action.getTerm(0).toString();
-        if (error == 0) {
-            if (view != null) {
-                view.logMessage(String.format("%s moving to %s", agName, destination));
-                view.update();
+        try {
+            int error = model.moveTo(agName, action);
+            String destination = action.getTerm(0).toString();
+            if (error == 0) {
+                if (view != null) {
+                    view.logMessage(String.format("%s moving to %s", agName, destination));
+                    view.update();
+                }
+                return true;
+            } else if (error == 1) {
+                if (view != null) {
+                    view.logMessage(String.format("invalid_destination: %s", destination));
+                    view.update();
+                }
+                addError(agName, "invalid_destination", "Unknown destination: " + action.getTerm(0).toString());
+                return false;
+            } else if (error == 2) {
+                if (view != null) {
+                    view.logMessage(String.format("path_blocked: %s", destination));
+                    view.update();
+                }
+                addError(agName, "path_blocked", "No path to destination");
+                return false;
+            } else if (error == 3) {
+                if (view != null) {
+                    view.logMessage(String.format("blocked_by_agent: %s", destination));
+                    view.update();
+                }
+                addError(agName, "blocked_by_agent", "Path blocked by another agent");
+                return true; // El movimiento se intentó pero fue bloqueado, el agente puede decidir esperar o replanificar
             }
+            return false;
+        } finally {
             updatePercepts();
-            return true;
-        } else if (error == 1) {
-            if (view != null) {
-                view.logMessage(String.format("invalid_destination: %s", destination));
-                view.update();
-            }
-            addError(agName, "invalid_destination", "Unknown destination: " + action.getTerm(0).toString());
-            return false;
-        } else if (error == 2) {
-            if (view != null) {
-                view.logMessage(String.format("path_blocked: %s", destination));
-                view.update();
-            }
-            addError(agName, "path_blocked", "No path to destination");
-            return false;
-        } else if (error == 3) {
-            if (view != null) {
-                view.logMessage(String.format("blocked_by_agent: %s", destination));
-                view.update();
-            }
-            addError(agName, "blocked_by_agent", "Path blocked by another agent");
-            return true; // El movimiento se intentó pero fue bloqueado, el agente puede decidir esperar o replanificar
         }
-        return false;
+
     }
 
     /**
@@ -243,6 +247,7 @@ public class WarehouseArtifact extends Environment {
         }
         return false;
     }
+
     /**
      * Acción: drop_at(ShelfId) Deposita el contenedor en una estantería
      */
@@ -347,10 +352,60 @@ public class WarehouseArtifact extends Environment {
         System.err.println("ERROR [" + agName + "]: " + errorType + " - " + data);
     }
 
+    //Espaguetis a la carbornara 
     void updatePercepts() {
-    }
-    /*
+        // Actualizar percepciones de posición
+        for (Map.Entry<String, Robot> entry : model.getRobots().entrySet()) {
+            String agName = entry.getKey();
+            Robot robot = entry.getValue();
+            Location loc = new Location(robot.getX(), robot.getY());
+
+            if (model.getLocation("lightInit").distance(loc) == 0) {
+                addPercept(agName, Literal.parseLiteral("at(" + robot.getId() + ",lightInit)"));
+            }
+            if (model.getLocation("mediumInit").distance(loc) == 0) {
+                addPercept(agName, Literal.parseLiteral("at(" + robot.getId() + ",mediumInit)"));
+            }
+            if (model.getLocation("heavyInit").distance(loc) == 0) {
+                addPercept(agName, Literal.parseLiteral("at(" + robot.getId() + ",heavyInit)"));
+            }
+            if (model.getLocation("entrance").distance(loc) <= 1) {
+                addPercept(agName, Literal.parseLiteral("at(" + robot.getId() + ",entrance)"));
+            }
+            if (model.isAdjacentToShelf(agName, "shelf_1")) {
+                addPercept(agName, Literal.parseLiteral("at(" + robot.getId() + ",shelf_1)"));
+            }
+            if (model.isAdjacentToShelf(agName, "shelf_2")) {
+                addPercept(agName, Literal.parseLiteral("at(" + robot.getId() + ",shelf_2)"));
+            }
+             if (model.isAdjacentToShelf(agName, "shelf_3")) {
+                addPercept(agName, Literal.parseLiteral("at(" + robot.getId() + ",shelf_3)"));
+            }
+             if (model.isAdjacentToShelf(agName, "shelf_4")) {
+                addPercept(agName, Literal.parseLiteral("at(" + robot.getId() + ",shelf_4)"));
+            }
+            if (model.isAdjacentToShelf(agName, "shelf_5")) {
+                addPercept(agName, Literal.parseLiteral("at(" + robot.getId() + ",shelf_5)"));
+            }
+            if (model.isAdjacentToShelf(agName, "shelf_6")) {
+                addPercept(agName, Literal.parseLiteral("at(" + robot.getId() + ",shelf_6)"));
+            }
+            if (model.isAdjacentToShelf(agName, "shelf_7")) {
+                addPercept(agName, Literal.parseLiteral("at(" + robot.getId() + ",shelf_7)"));
+            }
+            if (model.isAdjacentToShelf(agName, "shelf_8")) {
+                addPercept(agName, Literal.parseLiteral("at(" + robot.getId() + ",shelf_8)"));
+            }
+            if (model.isAdjacentToShelf(agName, "shelf_9")) {
+                addPercept(agName, Literal.parseLiteral("at(" + robot.getId() + ",shelf_9)"));
+            }
+
+        }
+
+        
+}
+/*
     
-     */
+ */
 
 }

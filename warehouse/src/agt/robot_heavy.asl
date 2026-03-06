@@ -11,17 +11,17 @@
 
 +!test_movement : true <-
     !go_to(heavyInit);
-    .wait(6000);
-    !go_to(shelf1);
-    .wait(6000);
+    .wait(2000);
+    !go_to(shelf_1);
+    .wait(2000);
     !go_to(heavyInit).
 
-+!go_to(Location) : not at(Location) <-
++!go_to(Location) : .my_name(X) & not at(X,Location) <-
 
     move_to(Location);
     .wait(500);
     !go_to(Location).
     
-+!go_to(Location) : at(Location) <-
++!go_to(Location) : .my_name(X) & at(X,Location) <-
     .print(" Posición alcanzada: ", Location);
     +state(idle).
