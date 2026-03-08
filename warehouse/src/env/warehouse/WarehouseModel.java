@@ -151,6 +151,7 @@ public class WarehouseModel extends GridWorldModel {
                 }
             }
         }
+        System.out.println("Shelves keys: " + shelves.keySet());
     }
 
     /**
@@ -204,13 +205,12 @@ public class WarehouseModel extends GridWorldModel {
             Location destLoc = getLocation(destination);
             Location currentLoc = new Location(robots.get(agName).getX(), robots.get(agName).getY());
 
-            if (currentLoc.equals(destLoc)) {
-                return 0; // Ya está en el destino
-            }
             if (destLoc == null) {
                 return 1;
             }
-
+            if (currentLoc.equals(destLoc)) {
+                return 0; // Ya está en el destino
+            }
             Location nextStep = findNextStep(agName, destLoc, currentLoc);
 
             if (nextStep == null) {
@@ -253,8 +253,9 @@ public class WarehouseModel extends GridWorldModel {
                 return 3;
             }
 //**************************************************************************************************** */
+            
             Container container = robot.getCarriedContainer();
-
+            System.out.println("Intentando depositar " + container.getId() + " en " + shelf.getId());
             // Verificar si cabe en la estantería
             if (!shelf.canStore(container)) {
                 return 4;
@@ -441,7 +442,7 @@ public class WarehouseModel extends GridWorldModel {
             System.out.println("Task assigned to " + agName + ": " + container.getId() + " -> " + bestShelf.getId());
 
             return Literal.parseLiteral(
-                    "task(\"" + container.getId() + "\",\"" + bestShelf.getId() + "\")").toString();
+                    "task(" + container.getId() + "," + bestShelf.getId() + ")").toString();
 
         } catch (Exception e) {
             e.printStackTrace();
@@ -465,25 +466,15 @@ public class WarehouseModel extends GridWorldModel {
 
     //funcion auxiliar para obtener una clase ubicacion a partir de un string
     public Location getLocation(String location) {
+        if (location.startsWith("shelf_")) {
+            Shelf s = shelves.get(location);
+            if (s != null) {
+                return findShelfMiddlePoint(s);
+            }
+            return null;
+        }
+
         switch (location) {
-            case "shelf_1":
-                return findShelfMiddlePoint(shelves.get("shelf_1"));
-            case "shelf_2":
-                return findShelfMiddlePoint(shelves.get("shelf_2"));
-            case "shelf_3":
-                return findShelfMiddlePoint(shelves.get("shelf_3"));
-            case "shelf_4":
-                return findShelfMiddlePoint(shelves.get("shelf_4"));
-            case "shelf_5":
-                return findShelfMiddlePoint(shelves.get("shelf_5"));
-            case "shelf_6":
-                return findShelfMiddlePoint(shelves.get("shelf_6"));
-            case "shelf_7":
-                return findShelfMiddlePoint(shelves.get("shelf_7"));
-            case "shelf_8":
-                return findShelfMiddlePoint(shelves.get("shelf_8"));
-            case "shelf_9":
-                return findShelfMiddlePoint(shelves.get("shelf_9"));
             case "entrance":
                 return new Location(1, 1);
             case "lightInit":
@@ -879,6 +870,7 @@ public class WarehouseModel extends GridWorldModel {
         return container;
     }
 //generacion justa de contenedores que hara que todos los robots tengan tareas acordes a sus capacidades, para probar el sistema con una carga de trabajo equilibrada, se puede cambiar a la función anterior para generar cajas de forma más variada y menos justa
+
     private Container generateRandomContainerFair() {
 
         Random rand = new Random();
