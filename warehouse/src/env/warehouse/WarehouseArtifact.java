@@ -187,7 +187,7 @@ public class WarehouseArtifact extends Environment {
     private boolean executeMoveTo(String agName, Structure action) {
         try {
             int error = model.moveTo(agName, action);
-            String destination = action.getTerm(0).toString();
+            String destination = action.getTerm(0).toString().replace("\"", "");
             if (error == 0) {
                 if (view != null) {
                     view.logMessage(String.format("%s moving to %s", agName, destination));
@@ -199,7 +199,7 @@ public class WarehouseArtifact extends Environment {
                     view.logMessage(String.format("invalid_destination: %s", destination));
                     view.update();
                 }
-                addError(agName, "invalid_destination", "Unknown destination: " + action.getTerm(0).toString());
+                addError(agName, "invalid_destination", "Unknown destination: " + destination);
                 return false;
             } else if (error == 2) {
                 if (view != null) {
@@ -218,6 +218,7 @@ public class WarehouseArtifact extends Environment {
             }
             return false;
         } finally {
+            removePerceptsByUnif(agName, Literal.parseLiteral("at(_,_)"));
             updatePercepts();
         }
 
@@ -258,7 +259,7 @@ public class WarehouseArtifact extends Environment {
         if (error == 0) {
             if (view != null) {
                 Robot robot = model.getRobots().get(agName);
-                view.logMessage(String.format("%s stored %s at %s", agName, robot.getCarriedContainer().getId(), shelfId));
+                view.logMessage(String.format("%s stored at %s", agName, shelfId));
                 view.update();
             }
             removePerceptsByUnif(agName, Literal.parseLiteral("carrying(_)"));
@@ -312,9 +313,11 @@ public class WarehouseArtifact extends Environment {
     private boolean executeGetContainerInfo(String agName, Structure action) {
         Literal containerInfo = model.getContainerInfo(agName, action); // Implementar si es necesario
         if (containerInfo != null) {
+            view.logMessage(String.format("%s requested info for %s: %s", agName, action.getTerm(0).toString(), containerInfo.toString()));
             addPercept(agName, containerInfo);
             return true;
         } else {
+            view.logMessage(String.format("%s requested info for %s: not found", agName, action.getTerm(0).toString()));
             addError(agName, "container_not_found", action.getTerm(0).toString());
             return false;
         }
