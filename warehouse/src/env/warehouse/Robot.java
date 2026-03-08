@@ -60,14 +60,10 @@ public class Robot {
      * Recoge un contenedor
      */
     public boolean pickup(Container container) {
-        System.out.println("**************************************************");
         if (carriedContainer != null || !canCarry(container)) {
-            System.out.println("no lo recogio");
             return false;
         }
         this.carriedContainer = container;
-        System.out.println("asignado: " + carriedContainer.getId());
-    
         return true;
     }
     
