@@ -26,6 +26,7 @@ public class WarehouseModel extends GridWorldModel {
     private Map<String, Robot> robots;
     private Map<String, Container> containers;
     private Map<String, Shelf> shelves;
+    //presindire de eso
     private ConcurrentLinkedQueue<Container> pendingContainers;
     private Map<String, String> taskAssignments; // containerId -> robotId
 
@@ -402,9 +403,19 @@ public class WarehouseModel extends GridWorldModel {
 
     public String assignTask(String agName, Structure action) {
         try {
+            String containerId = action.getTerm(0).toString().replace("\"", "");
+            Container container = containers.get(containerId);
+            
+   
+
             Robot robot = robots.get(agName);
+            // Verificar si el robot existe
             if (robot == null) {
-                return "null";
+                return "null_robot";
+            }
+            //la tarea ya fue asignada a otro robot, no asignar nueva tarea
+            if(taskAssignments.containsKey(containerId)) {
+                return "already_assigned";
             }
 
             // Si ya está ocupado, no asignar nueva tarea
@@ -412,16 +423,13 @@ public class WarehouseModel extends GridWorldModel {
                 return "busy";
             } // Robot ocupado o ya cargando algo
 
-            // Buscar contenedor pendiente
-            Container container = pendingContainers.poll();
+            // Verificar si el contenedor existe
             if (container == null) {
-                return "no_task";
-            } // No hay tareas pendientes
+                return "null_container";
+            }  
 
             // Verificar si el robot puede manejar el contenedor
             if (!robot.canCarry(container)) {
-                // Devolver a la cola
-                pendingContainers.offer(container);
                 return "cannot_carry";
             }
 
@@ -429,7 +437,6 @@ public class WarehouseModel extends GridWorldModel {
             Shelf bestShelf = findBestShelf(container);
             if (bestShelf == null) {
                 // No hay estanterías disponibles, devolver a la cola
-                pendingContainers.offer(container);
                 return "no_shelf_available";
             }
 
@@ -440,7 +447,8 @@ public class WarehouseModel extends GridWorldModel {
 
             // Notificar al agente
             System.out.println("Task assigned to " + agName + ": " + container.getId() + " -> " + bestShelf.getId());
-
+            pendingContainers.poll(); // Sacar el contenedor de la cola de pendientes
+            
             return Literal.parseLiteral(
                     "task(" + container.getId() + "," + bestShelf.getId() + ")").toString();
 
