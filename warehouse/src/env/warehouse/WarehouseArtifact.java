@@ -284,8 +284,12 @@ public class WarehouseArtifact extends Environment {
         String result = model.assignTask(agName, action);
         if ("error".equals(result)) {
             return false;
-        } else if (result.equals("null")) {
+        } else if (result.equals("null_robot")) {
             return false;
+        } else if (result.equals("null_container")) {
+            return false;
+        } else if (result.equals("already_assigned")) {
+            return true;
         } else if ("no_task".equals(result)) {
             addPercept(agName, Literal.parseLiteral("no_task"));
             return true;
