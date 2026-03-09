@@ -21,12 +21,10 @@ public class Location {
     public int distance(Location other) {
         return Math.abs(this.x - other.x) + Math.abs(this.y - other.y);
     }
-    @Override
-    public boolean equals(Object o) {
-        if (this == o) return true;
-        if (o == null || getClass() != o.getClass()) return false;
-        Location location = (Location) o;
-        return x == location.x && y == location.y;
+ 
+    public boolean equals(Location o) {
+ 
+        return x == o.x && y == o.y;
     }
 
     @Override

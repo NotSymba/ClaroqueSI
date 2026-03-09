@@ -12,7 +12,7 @@ public class WarehouseView extends JFrame {
     private static final int INFO_PANEL_WIDTH = 450;
     private static final int CONSOLE_HEIGHT = 180;
     
-    private WarehouseArtifact warehouse;
+    private WarehouseModel warehouse;
     private int gridWidth;
     private int gridHeight;
     private WarehousePanel warehousePanel;
@@ -23,7 +23,7 @@ public class WarehouseView extends JFrame {
     private JTextArea consoleArea;
     private JScrollPane consoleScroll;
     
-    public WarehouseView(WarehouseArtifact warehouse, int gridWidth, int gridHeight) {
+    public WarehouseView(WarehouseModel warehouse, int gridWidth, int gridHeight) {
         this.warehouse = warehouse;
         this.gridWidth = gridWidth;
         this.gridHeight = gridHeight;
@@ -60,6 +60,7 @@ public class WarehouseView extends JFrame {
         statsArea.setEditable(false);
         statsArea.setFont(new Font("Monospaced", Font.PLAIN, 12));
         statsArea.setBackground(Color.WHITE);
+        statsArea.setForeground(Color.BLACK);
         statsArea.setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
         JScrollPane statsScroll = new JScrollPane(statsArea);
         statsScroll.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -74,6 +75,7 @@ public class WarehouseView extends JFrame {
         robotsArea.setEditable(false);
         robotsArea.setFont(new Font("Monospaced", Font.PLAIN, 11));
         robotsArea.setBackground(Color.WHITE);
+        robotsArea.setForeground(Color.BLACK);
         robotsArea.setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
         JScrollPane robotsScroll = new JScrollPane(robotsArea);
         robotsScroll.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -88,6 +90,7 @@ public class WarehouseView extends JFrame {
         shelvesArea.setEditable(false);
         shelvesArea.setFont(new Font("Monospaced", Font.PLAIN, 11));
         shelvesArea.setBackground(Color.WHITE);
+        shelvesArea.setForeground(Color.BLACK);
         shelvesArea.setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
         JScrollPane shelvesScroll = new JScrollPane(shelvesArea);
         shelvesScroll.setAlignmentX(Component.LEFT_ALIGNMENT);
