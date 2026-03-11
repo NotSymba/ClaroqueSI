@@ -36,29 +36,31 @@ pending_containers(0).
 // 1. Reaccionar a nuevo contenedor
 +new_container(CId) : true <-
     .print("Nuevo contenedor: ", CId);
-    get_container_info(CId);
-    true.
+    get_container_info(CId).
 
-// 2. Recibir info y clasificar
+// 2. Recibir info y marcar como pendiente
 +container_info(CId, W, H, Weight, Type) : true <-
     .print("Info: ", CId, " - ", Weight, "kg");
     +pending_container(CId, Weight).
 
 
-+container_info(CId, W, H, Weight, Type) : true <-
+// 3. Clasificar contenedor pendiente y asignar robot
++pending_container(CId, Weight) : true <-
     .print("Clasificando ", CId);
     
-     findBestShelf(CId); 
- ;
+    //findBestShelf(CId); 
     // Asignar a robot apropiado
     if (Weight <= 10) {
         .print("Asignando a robot_light"); 
-
+        .send(robot_light, achieve, task(CId, shelf_4));
         // Nota: Esta es una simplificación
         // El scheduler debería verificar disponibilidad
-    } else if (Weight <= 30) {
-        .print("Asignando a robot_medium");
     } else {
-        .print("Asignando a robot_heavy");
-    }
-  
+        if (Weight <= 30) {
+            .print("Asignando a robot_medium");
+            .send(robot_medium, achieve, task(CId, shelf_7));
+        } else {
+            .print("Asignando a robot_heavy");
+            .send(robot_heavy, achieve, task(CId, shelf_9));
+        }
+    }.
