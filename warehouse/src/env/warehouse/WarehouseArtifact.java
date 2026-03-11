@@ -207,7 +207,7 @@ public class WarehouseArtifact extends Environment {
                     view.update();
                 }
                 addError(agName, "path_blocked", "No path to destination");
-                return false;
+                return true;
             } else if (error == 3) {
                 if (view != null) {
                     view.logMessage(String.format("blocked_by_agent: %s", destination));
@@ -215,6 +215,9 @@ public class WarehouseArtifact extends Environment {
                 }
                 addError(agName, "blocked_by_agent", "Path blocked by another agent");
                 return true; // El movimiento se intentó pero fue bloqueado, el agente puede decidir esperar o replanificar
+            } else {
+                addError(agName, "uknown", "uknown error code: " + error);
+                System.out.println("uknown error code: " + error);
             }
             return false;
         } finally {
@@ -352,11 +355,12 @@ public class WarehouseArtifact extends Environment {
      * Agrega un error a las percepciones
      */
     private void addError(String agName, String errorType, String data) {
-        totalErrors++;
+        
         addPercept(agName, Literal.parseLiteral(
                 "error(" + errorType + ",\"" + data + "\")"
         ));
         System.err.println("ERROR [" + agName + "]: " + errorType + " - " + data);
+        addPercept("supervisor", Literal.parseLiteral("total_errors(" + errorType + "," + totalErrors + ")"));
     }
 
     //Espaguetis a la carbornara 
@@ -385,10 +389,10 @@ public class WarehouseArtifact extends Environment {
             if (model.isAdjacentToShelf(agName, "shelf_2")) {
                 addPercept(agName, Literal.parseLiteral("at(" + robot.getId() + ",shelf_2)"));
             }
-             if (model.isAdjacentToShelf(agName, "shelf_3")) {
+            if (model.isAdjacentToShelf(agName, "shelf_3")) {
                 addPercept(agName, Literal.parseLiteral("at(" + robot.getId() + ",shelf_3)"));
             }
-             if (model.isAdjacentToShelf(agName, "shelf_4")) {
+            if (model.isAdjacentToShelf(agName, "shelf_4")) {
                 addPercept(agName, Literal.parseLiteral("at(" + robot.getId() + ",shelf_4)"));
             }
             if (model.isAdjacentToShelf(agName, "shelf_5")) {
@@ -409,10 +413,9 @@ public class WarehouseArtifact extends Environment {
 
         }
 
-        
-}
-/*
+    }
+    /*
     
- */
+     */
 
 }

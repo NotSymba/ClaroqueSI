@@ -11,12 +11,14 @@ import utils.Location;
 
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 import javax.swing.Action;
 
 public class WarehouseModel extends GridWorldModel {
 
+    int speed = 75; // velocidad de los ticks, ajustable para acelerar o ralentizar la simulación
     // Dimensiones del almacén
     private static final int GRID_WIDTH = 20;
     private static final int GRID_HEIGHT = 15;
@@ -30,17 +32,19 @@ public class WarehouseModel extends GridWorldModel {
     private ConcurrentLinkedQueue<Container> pendingContainers;
     private Map<String, String> taskAssignments; // containerId -> robotId
 
+    // Dentro de WarehouseModel
+    private Map<Integer, Map<Location, String>> reservationTable; // tick -> (Location -> robotId)
+    private AtomicInteger currentTick = new AtomicInteger(0); // Incrementa cada ciclo del entorno
     // GUI visual
     // Contadores para generar IDs
     private int containerCounter = 0;
-
     // Métricas
     private int totalContainersProcessed = 0;
     private int totalErrors = 0;
     private long startTime;
 
     // Gestión del thread generador de contenedores
-    private ExecutorService containerGeneratorExecutor;
+    private ExecutorService tickCountExecutor;
     private volatile boolean running = true;
 
     public WarehouseModel() {
@@ -53,7 +57,7 @@ public class WarehouseModel extends GridWorldModel {
         shelves = new ConcurrentHashMap<>();
         pendingContainers = new ConcurrentLinkedQueue<>();
         taskAssignments = new ConcurrentHashMap<>();
-
+        reservationTable = new ConcurrentHashMap<>();
         // Inicializar grid
         initializeGrid();
 
@@ -69,7 +73,7 @@ public class WarehouseModel extends GridWorldModel {
         System.out.println("Grid size: " + GRID_WIDTH + "x" + GRID_HEIGHT);
         System.out.println("Robots: " + robots.size());
         System.out.println("Shelves: " + shelves.size());
-
+        startTickExecutor();
     }
 
     /**
@@ -169,6 +173,40 @@ public class WarehouseModel extends GridWorldModel {
         return container;
 
     }
+//contador de ticks de move
+
+    private void startTickExecutor() {
+        tickCountExecutor = Executors.newSingleThreadExecutor(r -> {
+            Thread t = new Thread(r, "tickCounterThread");
+            t.setDaemon(true);
+            return t;
+        });
+
+        tickCountExecutor.submit(() -> {
+            try {
+                while (running) {
+                    // Avanzar tick global
+                    int tick = currentTick.incrementAndGet();
+
+                    // Limpiar reservas > 10 ticks atrás
+                    reservationTable.entrySet().removeIf(entry -> entry.getKey() < tick - 10);
+
+                    Thread.sleep(speed); //
+
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+
+    }
+
+    public void stopTickExecutor() {
+        running = false;
+        if (tickCountExecutor != null) {
+            tickCountExecutor.shutdownNow();
+        }
+    }
 
     /**
      * Detiene el entorno de forma limpia
@@ -186,6 +224,7 @@ public class WarehouseModel extends GridWorldModel {
         Shelf shelf = shelves.get(shelfId);
 
         if (robot == null || container == null || shelf == null) {
+            totalErrors++;
             return false;
         }
 
@@ -207,29 +246,31 @@ public class WarehouseModel extends GridWorldModel {
             Location currentLoc = new Location(robots.get(agName).getX(), robots.get(agName).getY());
 
             if (destLoc == null) {
+                totalErrors++;
                 return 1;
             }
             if (currentLoc.equals(destLoc)) {
                 return 0; // Ya está en el destino
             }
+            if (!destination.startsWith("shelf_") && !canMoveToWithReservation(robot, destLoc)) { // si hay agente lo mejor es que espere 1 turno a que se libere la casilla
+                totalErrors++;
+                return 3; // Destino ocupado
+            }
             Location nextStep = findNextStep(agName, destLoc, currentLoc);
+            // int moveTime = moveTime(robot);
 
             if (nextStep == null) {
+                totalErrors++;
                 return 2;
             }
-            if (hayAgenteEn(nextStep)) { //gestionar Colision en dependencia de las prioridades del robot
-                // replanificación automática
-                Location alt = findNextStep(agName, destLoc, currentLoc);
-                if (alt == null || hayAgenteEn(alt)) {
-                    return 3;
-                }
-                nextStep = alt;
-            }
+
             robot.setPosition(nextStep.getX(), nextStep.getY());
+
             return 0;
 
         } catch (Exception e) {
             e.printStackTrace();
+            totalErrors++;
             return 4;
         }
     }
@@ -242,23 +283,27 @@ public class WarehouseModel extends GridWorldModel {
             Shelf shelf = shelves.get(shelfId);
 
             if (robot == null || shelf == null) {
+                totalErrors++;
                 return 1;
             }
 
             if (!robot.isCarrying()) {
+                totalErrors++;
                 return 2;
             }
 //**************************************************************************************************** */
             // tapirico
             if (!isAdjacentToShelf(agName, shelfId)) {
+                totalErrors++;
                 return 3;
             }
 //**************************************************************************************************** */
-            
+
             Container container = robot.getCarriedContainer();
             System.out.println("Intentando depositar " + container.getId() + " en " + shelf.getId());
             // Verificar si cabe en la estantería
             if (!shelf.canStore(container)) {
+                totalErrors++;
                 return 4;
             }
 
@@ -286,18 +331,18 @@ public class WarehouseModel extends GridWorldModel {
             Container container = containers.get(containerId);
 
             if (robot == null || container == null) {
-                //addError(agName, "invalid_pick", "Robot or container not found");
+                totalErrors++;
                 return 1;
             }
 
             if (robot.isCarrying()) {
-                //addError(agName, "already_carrying", "Robot is already carrying something");
+                totalErrors++;
                 return 2;
             }
 
             // Verificar distancia a la zona de entrada
             if (robot.distanceTo(1, 1) > 2) {
-                //addError(agName, "too_far", "Container too far away");
+                totalErrors++;
                 return 3;
             }
 
@@ -308,6 +353,7 @@ public class WarehouseModel extends GridWorldModel {
             return 0;
 
         } catch (Exception e) {
+            totalErrors++;
             e.printStackTrace();
             return 4;
         }
@@ -357,6 +403,7 @@ public class WarehouseModel extends GridWorldModel {
             Container container = containers.get(containerId);
 
             if (container == null) {
+                totalErrors++;
                 return null;
             }
 
@@ -366,7 +413,8 @@ public class WarehouseModel extends GridWorldModel {
                         "free_shelf(\"" + containerId + "\",\"" + shelf.getId() + "\")"
                 );
             }
-
+            //no hay estanterías disponibles, el agente debería esperar a que se libere alguna, pero por ahora solo le decimos que no hay estanterías disponibles y que lo intente de nuevo luego
+            totalErrors++;
             return null;
 
         } catch (Exception e) {
@@ -381,6 +429,7 @@ public class WarehouseModel extends GridWorldModel {
             Container container = containers.get(containerId);
 
             if (container == null) {
+                totalErrors++;
                 return null;
             }
 
@@ -396,6 +445,7 @@ public class WarehouseModel extends GridWorldModel {
             return toRet;
 
         } catch (Exception e) {
+            totalErrors++;
             e.printStackTrace();
             return null;
         }
@@ -405,37 +455,41 @@ public class WarehouseModel extends GridWorldModel {
         try {
             String containerId = action.getTerm(0).toString().replace("\"", "");
             Container container = containers.get(containerId);
-            
-   
 
             Robot robot = robots.get(agName);
             // Verificar si el robot existe
             if (robot == null) {
+                totalErrors++;
                 return "null_robot";
             }
             //la tarea ya fue asignada a otro robot, no asignar nueva tarea
-            if(taskAssignments.containsKey(containerId)) {
+            if (taskAssignments.containsKey(containerId)) {
+                totalErrors++;
                 return "already_assigned";
             }
 
             // Si ya está ocupado, no asignar nueva tarea
             if (robot.isBusy() || robot.isCarrying()) {
+                totalErrors++;
                 return "busy";
             } // Robot ocupado o ya cargando algo
 
             // Verificar si el contenedor existe
             if (container == null) {
+                totalErrors++;
                 return "null_container";
-            }  
+            }
 
             // Verificar si el robot puede manejar el contenedor
             if (!robot.canCarry(container)) {
+                totalErrors++;
                 return "cannot_carry";
             }
 
             // Buscar estantería apropiada
             Shelf bestShelf = findBestShelf(container);
             if (bestShelf == null) {
+                totalErrors++;
                 // No hay estanterías disponibles, devolver a la cola
                 return "no_shelf_available";
             }
@@ -448,12 +502,14 @@ public class WarehouseModel extends GridWorldModel {
             // Notificar al agente
             System.out.println("Task assigned to " + agName + ": " + container.getId() + " -> " + bestShelf.getId());
             pendingContainers.poll(); // Sacar el contenedor de la cola de pendientes
-            
+
             return Literal.parseLiteral(
                     "task(" + container.getId() + "," + bestShelf.getId() + ")").toString();
 
         } catch (Exception e) {
             e.printStackTrace();
+            totalErrors++;
+
             return "error";
         }
     }
@@ -501,8 +557,8 @@ public class WarehouseModel extends GridWorldModel {
 
         Location realDest = dest;
 
-        if (!canMoveTo(agName, dest.getX(), dest.getY())) {
-            realDest = getNearestFreeCell(dest);
+        if (!canMoveToWithReservation(robots.get(agName), dest)) {
+            realDest = getNearestFreeCell(robots.get(agName), dest);
         }
 
         if (realDest == null) {
@@ -514,73 +570,85 @@ public class WarehouseModel extends GridWorldModel {
         if (camino == null || camino.size() < 2) {
             return null;
         }
-
+        reservePath(robots.get(agName), camino);
         return camino.get(1).getLoc();
     }
 
     public List<Nodo> A_star(String agName, Location start, Location dest) {
+        int startTick = currentTick.get();
+        PriorityQueue<Nodo> open = new PriorityQueue<>(Comparator.comparingInt(Nodo::getF));
+        Map<Location, Integer> bestG = new HashMap<>();
+        Set<String> closed = new HashSet<>();
 
-        PriorityQueue<Nodo> opened = new PriorityQueue<>();
-        Map<Location, Integer> mejorG = new HashMap<>();
-        Set<Location> closed = new HashSet<>();
+        Nodo inicial = new Nodo(start, null, 0, start.distance(dest), startTick);
+        open.add(inicial);
+        bestG.put(start, 0);
 
-        Nodo inicial = new Nodo(start, null, 0, start.distance(dest));
-        opened.add(inicial);
-        mejorG.put(start, 0);
+        int[][] dirs = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}, {0, 0}}; // 0,0 -> esperar un tick
 
-        int[][] dirs = {{1, 0}, {0, 1}, {-1, 0}, {0, -1}};
-
-        while (!opened.isEmpty()) {
-
-            Nodo actual = opened.poll();
-
-            if (actual.getLoc().equals(dest)) {
-                List<Nodo> camino = new ArrayList<>();
-                while (actual != null) {
-                    camino.add(actual);
-                    actual = actual.getPadre();
-                }
-                Collections.reverse(camino);
-                return camino;
-            }
-
-            if (closed.contains(actual.getLoc())) {
+        while (!open.isEmpty()) {
+            Nodo actual = open.poll();
+            String key = actual.getLoc().getX() + "," + actual.getLoc().getY() + "," + actual.getTick();
+            if (closed.contains(key)) {
                 continue;
             }
-            closed.add(actual.getLoc());
+            closed.add(key);
+
+            if (actual.getLoc().equals(dest)) {
+                // Reconstruir camino
+                List<Nodo> path = new ArrayList<>();
+                Nodo n = actual;
+                while (n != null) {
+                    path.add(n);
+                    n = n.getPadre();
+                }
+                Collections.reverse(path);
+                return path;
+            }
 
             for (int[] d : dirs) {
-
                 int nx = actual.getLoc().getX() + d[0];
                 int ny = actual.getLoc().getY() + d[1];
+                Location nextLoc = new Location(nx, ny);
+                int moveTime = moveTime(robots.get(agName));
 
-                if (!canMoveTo(agName, nx, ny)) {
+                // Tick en que ocuparíamos esta celda
+                int nextTick = actual.getTick() + 1;
+
+                // Verificar límites y obstáculos
+                if (!canMoveTo(nx, ny)) {
                     continue;
                 }
 
-                Location nueva = new Location(nx, ny);
-
-                int nuevoG = actual.getG() + 1 + penaltyRobotsNearby(agName, nx, ny);
-
-                if (mejorG.containsKey(nueva) && mejorG.get(nueva) <= nuevoG) {
+                // Verificar reservas en ticks exactos
+                boolean blocked = false;
+                for (int t = 0; t < moveTime; t++) {
+                    int checkTick = nextTick + t;
+                    Map<Location, String> reserved = reservationTable.getOrDefault(checkTick, Collections.emptyMap());
+                    String reserver = reserved.get(nextLoc);
+                    if (reserver != null && !reserver.equals(agName)) {
+                        blocked = true;
+                        break;
+                    }
+                }
+                if (blocked) {
                     continue;
                 }
 
-                mejorG.put(nueva, nuevoG);
+                int g = actual.getG() + moveTime + penaltyRobotsNearby(agName, nx, ny);
+                if (bestG.containsKey(nextLoc) && bestG.get(nextLoc) <= g) {
+                    continue;
+                }
+                bestG.put(nextLoc, g);
 
-                opened.add(new Nodo(
-                        nueva,
-                        actual,
-                        nuevoG,
-                        nueva.distance(dest)
-                ));
+                open.add(new Nodo(nextLoc, actual, g, nextLoc.distance(dest), nextTick));
             }
         }
 
-        return null;
+        return null; // no se encontró camino
     }
 
-    private boolean canMoveTo(String agName, int x, int y) {
+    private boolean canMoveTo(int x, int y) {
         // Limites del grid
         if (x < 0 || x >= GRID_WIDTH || y < 0 || y >= GRID_HEIGHT) {
             return false;
@@ -590,7 +658,9 @@ public class WarehouseModel extends GridWorldModel {
         if (cell == CellType.BLOCKED || cell == CellType.SHELF) {
             return false;
         }
-
+        if (hayAgenteEn(new Location(x, y))) {
+            return false;
+        }
         return true; // Permitimos celdas ocupadas
     }
 
@@ -668,16 +738,18 @@ public class WarehouseModel extends GridWorldModel {
         return totalErrors;
     }
 
+    //encuentra el punto medio pero desplazado a la casilla de arriba a la izquierda para que sea 
+    //mas probable que se encuentre casillas libres mas cercanas al robot
     private Location findShelfMiddlePoint(Shelf shelf) {
-        int midX = shelf.getX() + shelf.getWidth() / 2;
-        int midY = shelf.getY() + shelf.getHeight() / 2;
+        int midX = shelf.getX() + shelf.getWidth() / 2 - 1;
+        int midY = shelf.getY() + shelf.getHeight() / 2 - 1;
         return new Location(midX, midY);
     }
 
     //la casilla libre mas cercana a la estantería, para que el robot se acerque lo máximo posible aunque no pueda llegar a la casilla central  
-    private Location getNearestFreeCell(Location dest) {
+    private Location getNearestFreeCell(Robot robot, Location dest) {
 
-        if (canMoveTo("", dest.getX(), dest.getY())) {
+        if (canMoveToWithReservation(robot, dest)) {
             return dest;
         }
 
@@ -710,7 +782,7 @@ public class WarehouseModel extends GridWorldModel {
                     continue;
                 }
 
-                if (canMoveTo("", nx, ny)) {
+                if (canMoveToWithReservation(robot, next)) {
                     return next;
                 }
 
@@ -759,6 +831,38 @@ public class WarehouseModel extends GridWorldModel {
         }
 
         return false;
+    }
+//--------------------------------------------------------------------------------------------------------
+//mas de pathfinding y movimiento
+
+    private boolean canMoveToWithReservation(Robot robot, Location nextStep) {
+        int moveTime = moveTime(robot);
+        int tick = currentTick.get();
+
+        for (int t = 0; t < moveTime; t++) {
+            int futureTick = tick + t;
+            Map<Location, String> reserved = reservationTable.getOrDefault(futureTick, Collections.emptyMap());
+
+            String reserver = reserved.get(nextStep);
+            if (reserver != null && !reserver.equals(robot.getId())) {
+                // Otra persona va a ocupar la celda en este tick
+                return false;
+            }
+        }
+
+        return canMoveTo(nextStep.getX(), nextStep.getY());
+    }
+
+    private void reservePath(Robot robot, List<Nodo> path) {
+        for (Nodo n : path) {
+            int moveTime = moveTime(robot);
+            for (int t = 0; t < moveTime; t++) {
+                int futureTick = n.getTick() + t;
+                reservationTable
+                        .computeIfAbsent(futureTick, k -> new ConcurrentHashMap<>())
+                        .put(n.getLoc(), robot.getId());
+            }
+        }
     }
 
     //*******************************************************************************************************/
@@ -938,5 +1042,18 @@ public class WarehouseModel extends GridWorldModel {
         container.setPosition(1, 1);
 
         return container;
+    }
+
+    private int moveTime(Robot r) {
+        switch (r.getSpeed()) {
+            case 1:
+                return 5;
+            case 2:
+                return 3;
+            case 3:
+                return 1;
+            default:
+                throw new AssertionError();
+        }
     }
 }
