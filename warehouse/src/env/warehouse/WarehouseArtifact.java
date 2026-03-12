@@ -201,13 +201,7 @@ public class WarehouseArtifact extends Environment {
                 }
                 addError(agName, "invalid_destination", "Unknown destination: " + destination);
                 return false;
-            } else if (error == 2) {
-                if (view != null) {
-                    view.logMessage(String.format("path_blocked: %s", destination));
-                    view.update();
-                }
-                addError(agName, "path_blocked", "No path to destination");
-                return true;
+            
             } else if (error == 3) {
                 if (view != null) {
                     view.logMessage(String.format("blocked_by_agent: %s", destination));
@@ -355,7 +349,7 @@ public class WarehouseArtifact extends Environment {
      * Agrega un error a las percepciones
      */
     private void addError(String agName, String errorType, String data) {
-        
+        removePerceptsByUnif(agName, Literal.parseLiteral("error(_,_)"));
         addPercept(agName, Literal.parseLiteral(
                 "error(" + errorType + ",\"" + data + "\")"
         ));

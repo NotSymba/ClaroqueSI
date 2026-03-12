@@ -33,8 +33,7 @@ public class WarehouseModel extends GridWorldModel {
     private Map<String, String> taskAssignments; // containerId -> robotId
 
     // Dentro de WarehouseModel
-    private Map<Integer, Map<Location, String>> reservationTable; // tick -> (Location -> robotId)
-    private AtomicInteger currentTick = new AtomicInteger(0); // Incrementa cada ciclo del entorno
+    private Map<Integer, Map<Location, String>> reservationTable; // tick -> (Location -> robotId)  
     // GUI visual
     // Contadores para generar IDs
     private int containerCounter = 0;
@@ -44,6 +43,7 @@ public class WarehouseModel extends GridWorldModel {
     private long startTime;
 
     // Gestión del thread generador de contenedores
+    private volatile int currentTick=0;
     private ExecutorService tickCountExecutor;
     private volatile boolean running = true;
 
@@ -186,10 +186,10 @@ public class WarehouseModel extends GridWorldModel {
             try {
                 while (running) {
                     // Avanzar tick global
-                    int tick = currentTick.incrementAndGet();
+                    currentTick++;
 
                     // Limpiar reservas > 10 ticks atrás
-                    reservationTable.entrySet().removeIf(entry -> entry.getKey() < tick - 10);
+                    reservationTable.entrySet().removeIf(entry -> entry.getKey() < currentTick - 10);
 
                     Thread.sleep(speed); //
 
@@ -252,18 +252,34 @@ public class WarehouseModel extends GridWorldModel {
             if (currentLoc.equals(destLoc)) {
                 return 0; // Ya está en el destino
             }
-            if (!destination.startsWith("shelf_") && !canMoveToWithReservation(robot, destLoc)) { // si hay agente lo mejor es que espere 1 turno a que se libere la casilla
+            //quitar
+            /*
+            if (!destination.startsWith("shelf_") && !canMoveToWithReservation(robot, destLoc, curren)) { // si hay agente lo mejor es que espere 1 turno a que se libere la casilla
                 totalErrors++;
+                System.out.println("error de ruta destino ocupado");
                 return 3; // Destino ocupado
             }
+            */
             Location nextStep = findNextStep(agName, destLoc, currentLoc);
             // int moveTime = moveTime(robot);
 
             if (nextStep == null) {
                 totalErrors++;
-                return 2;
+                System.out.println("error de ruta : no ruta");
+                return 3;
             }
-
+            //necesario porque tenemos desface temporal
+            if (!canMoveToWithReservation(robot, nextStep, currentTick)) {
+                totalErrors++;
+                System.out.println("error de ruta: agente en ruta");
+                return 3; // Destino ocupado
+            }
+            //agente estatico ocupando un lugar
+            if (hayAgenteEn(nextStep)) {
+                totalErrors++;
+                System.out.println("error de ruta: agente estatico en ruta");
+                return 3; // Destino ocupado
+            }
             robot.setPosition(nextStep.getX(), nextStep.getY());
 
             return 0;
@@ -557,7 +573,7 @@ public class WarehouseModel extends GridWorldModel {
 
         Location realDest = dest;
 
-        if (!canMoveToWithReservation(robots.get(agName), dest)) {
+        if (!canMoveToWithReservation(robots.get(agName), dest, currentTick)) {
             realDest = getNearestFreeCell(robots.get(agName), dest);
         }
 
@@ -570,12 +586,13 @@ public class WarehouseModel extends GridWorldModel {
         if (camino == null || camino.size() < 2) {
             return null;
         }
+        clearReservations(agName);
         reservePath(robots.get(agName), camino);
         return camino.get(1).getLoc();
     }
 
     public List<Nodo> A_star(String agName, Location start, Location dest) {
-        int startTick = currentTick.get();
+        int startTick = currentTick;
         PriorityQueue<Nodo> open = new PriorityQueue<>(Comparator.comparingInt(Nodo::getF));
         Map<Location, Integer> bestG = new HashMap<>();
         Set<String> closed = new HashSet<>();
@@ -616,7 +633,7 @@ public class WarehouseModel extends GridWorldModel {
                 int nextTick = actual.getTick() + 1;
 
                 // Verificar límites y obstáculos
-                if (!canMoveTo(nx, ny)) {
+                if (!canMoveToWithReservation(robots.get(agName), nextLoc, nextTick)) {
                     continue;
                 }
 
@@ -658,9 +675,9 @@ public class WarehouseModel extends GridWorldModel {
         if (cell == CellType.BLOCKED || cell == CellType.SHELF) {
             return false;
         }
-        if (hayAgenteEn(new Location(x, y))) {
+        /*if (hayAgenteEn(new Location(x, y))) {
             return false;
-        }
+        }*/
         return true; // Permitimos celdas ocupadas
     }
 
@@ -748,10 +765,13 @@ public class WarehouseModel extends GridWorldModel {
 
     //la casilla libre mas cercana a la estantería, para que el robot se acerque lo máximo posible aunque no pueda llegar a la casilla central  
     private Location getNearestFreeCell(Robot robot, Location dest) {
-
+        //ya se comprueva
+        /*
         if (canMoveToWithReservation(robot, dest)) {
             return dest;
         }
+        */
+
 
         Queue<Location> queue = new LinkedList<>();
         Set<Location> visited = new HashSet<>();
@@ -782,7 +802,7 @@ public class WarehouseModel extends GridWorldModel {
                     continue;
                 }
 
-                if (canMoveToWithReservation(robot, next)) {
+                if (canMoveTo(nx, ny) && !hayAgenteEn(next)) {
                     return next;
                 }
 
@@ -834,25 +854,28 @@ public class WarehouseModel extends GridWorldModel {
     }
 //--------------------------------------------------------------------------------------------------------
 //mas de pathfinding y movimiento
+//CREO QUE ESTA BUGED
 
-    private boolean canMoveToWithReservation(Robot robot, Location nextStep) {
-        int moveTime = moveTime(robot);
-        int tick = currentTick.get();
+    private boolean canMoveToWithReservation(Robot robot, Location loc, int tick) {
 
-        for (int t = 0; t < moveTime; t++) {
-            int futureTick = tick + t;
-            Map<Location, String> reserved = reservationTable.getOrDefault(futureTick, Collections.emptyMap());
+    int moveTime = moveTime(robot);
 
-            String reserver = reserved.get(nextStep);
-            if (reserver != null && !reserver.equals(robot.getId())) {
-                // Otra persona va a ocupar la celda en este tick
-                return false;
-            }
+    for (int t = 0; t < moveTime; t++) {
+
+        int futureTick = tick + t;
+
+        Map<Location, String> reserved =
+            reservationTable.getOrDefault(futureTick, Collections.emptyMap());
+
+        String reserver = reserved.get(loc);
+
+        if (reserver != null && !reserver.equals(robot.getId())) {
+            return false;
         }
-
-        return canMoveTo(nextStep.getX(), nextStep.getY());
     }
 
+    return canMoveTo(loc.getX(), loc.getY());
+}
     private void reservePath(Robot robot, List<Nodo> path) {
         for (Nodo n : path) {
             int moveTime = moveTime(robot);
@@ -863,6 +886,14 @@ public class WarehouseModel extends GridWorldModel {
                         .put(n.getLoc(), robot.getId());
             }
         }
+    }
+
+    private void clearReservations(String robotId) {
+
+        for (Map<Location, String> reservations : reservationTable.values()) {
+            reservations.entrySet().removeIf(e -> e.getValue().equals(robotId));
+        }
+
     }
 
     //*******************************************************************************************************/
