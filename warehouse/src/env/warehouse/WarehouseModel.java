@@ -18,6 +18,7 @@ import javax.swing.Action;
 
 public class WarehouseModel extends GridWorldModel {
 
+    int proporcionMovAccion = 3;
     int speed = 75; // velocidad de los ticks, ajustable para acelerar o ralentizar la simulación
     // Dimensiones del almacén
     private static final int GRID_WIDTH = 20;
@@ -43,7 +44,7 @@ public class WarehouseModel extends GridWorldModel {
     private long startTime;
 
     // Gestión del thread generador de contenedores
-    private volatile int currentTick=0;
+    private volatile int currentTick = 0;
     private ExecutorService tickCountExecutor;
     private volatile boolean running = true;
 
@@ -259,7 +260,7 @@ public class WarehouseModel extends GridWorldModel {
                 System.out.println("error de ruta destino ocupado");
                 return 3; // Destino ocupado
             }
-            */
+             */
             Location nextStep = findNextStep(agName, destLoc, currentLoc);
             // int moveTime = moveTime(robot);
 
@@ -326,6 +327,7 @@ public class WarehouseModel extends GridWorldModel {
             // Depositar
             shelf.store(container);
             robot.drop();
+            reserveAction(robot, new Location(robot.getX(), robot.getY())); // Reservar la celda por el tiempo que permaneceremos
             container.setAssignedShelf(shelfId);
 
             totalContainersProcessed++;
@@ -365,7 +367,7 @@ public class WarehouseModel extends GridWorldModel {
             // Recoger
             robot.pickup(container);
             container.setPicked(true);
-
+            reserveAction(robot, new Location(robot.getX(), robot.getY())); // Reservar la celda por el tiempo que permaneceremos
             return 0;
 
         } catch (Exception e) {
@@ -667,6 +669,8 @@ public class WarehouseModel extends GridWorldModel {
 
     private boolean canMoveTo(int x, int y) {
         // Limites del grid
+        Robot test;
+
         if (x < 0 || x >= GRID_WIDTH || y < 0 || y >= GRID_HEIGHT) {
             return false;
         }
@@ -675,9 +679,18 @@ public class WarehouseModel extends GridWorldModel {
         if (cell == CellType.BLOCKED || cell == CellType.SHELF) {
             return false;
         }
-        /*if (hayAgenteEn(new Location(x, y))) {
+        Location loc = new Location(x, y);
+
+        // Comprobar si la celda es alguna de las posiciones init y si hay un robot
+        if (loc.equals(getLocation("lightInit")) && hayAgenteEn(loc)) {
             return false;
-        }*/
+        }
+        if (loc.equals(getLocation("mediumInit")) && hayAgenteEn(loc)) {
+            return false;
+        }
+        if (loc.equals(getLocation("heavyInit")) && hayAgenteEn(loc)) {
+            return false;
+        }
         return true; // Permitimos celdas ocupadas
     }
 
@@ -770,8 +783,7 @@ public class WarehouseModel extends GridWorldModel {
         if (canMoveToWithReservation(robot, dest)) {
             return dest;
         }
-        */
-
+         */
 
         Queue<Location> queue = new LinkedList<>();
         Set<Location> visited = new HashSet<>();
@@ -858,24 +870,25 @@ public class WarehouseModel extends GridWorldModel {
 
     private boolean canMoveToWithReservation(Robot robot, Location loc, int tick) {
 
-    int moveTime = moveTime(robot);
+        int moveTime = moveTime(robot);
 
-    for (int t = 0; t < moveTime; t++) {
+        for (int t = 0; t < moveTime; t++) {
 
-        int futureTick = tick + t;
+            int futureTick = tick + t;
 
-        Map<Location, String> reserved =
-            reservationTable.getOrDefault(futureTick, Collections.emptyMap());
+            Map<Location, String> reserved
+                    = reservationTable.getOrDefault(futureTick, Collections.emptyMap());
 
-        String reserver = reserved.get(loc);
+            String reserver = reserved.get(loc);
 
-        if (reserver != null && !reserver.equals(robot.getId())) {
-            return false;
+            if (reserver != null && !reserver.equals(robot.getId())) {
+                return false;
+            }
         }
+
+        return canMoveTo(loc.getX(), loc.getY());
     }
 
-    return canMoveTo(loc.getX(), loc.getY());
-}
     private void reservePath(Robot robot, List<Nodo> path) {
         for (Nodo n : path) {
             int moveTime = moveTime(robot);
@@ -894,6 +907,21 @@ public class WarehouseModel extends GridWorldModel {
             reservations.entrySet().removeIf(e -> e.getValue().equals(robotId));
         }
 
+    }
+
+    private void reserveAction(Robot robot, Location loc) {
+
+        int startTick = currentTick;
+
+        int duration = moveTime(robot) * proporcionMovAccion;
+        for (int t = 0; t < duration; t++) {
+
+            int futureTick = startTick + t;
+
+            reservationTable
+                    .computeIfAbsent(futureTick, k -> new ConcurrentHashMap<>())
+                    .put(loc, robot.getId());
+        }
     }
 
     //*******************************************************************************************************/
