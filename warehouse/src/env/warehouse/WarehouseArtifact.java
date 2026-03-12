@@ -26,11 +26,11 @@ public class WarehouseArtifact extends Environment {
     private WarehouseModel model;
 
     // Contadores para generar IDs
-    private int containerCounter = 0;
+ 
     // Métricas
-    private int totalContainersProcessed = 0;
+ 
     private int totalErrors = 0;
-    private long startTime;
+ 
 
     private WarehouseView view;
 
@@ -201,13 +201,7 @@ public class WarehouseArtifact extends Environment {
                 }
                 addError(agName, "invalid_destination", "Unknown destination: " + destination);
                 return false;
-            } else if (error == 2) {
-                if (view != null) {
-                    view.logMessage(String.format("path_blocked: %s", destination));
-                    view.update();
-                }
-                addError(agName, "path_blocked", "No path to destination");
-                return false;
+
             } else if (error == 3) {
                 if (view != null) {
                     view.logMessage(String.format("blocked_by_agent: %s", destination));
@@ -215,6 +209,9 @@ public class WarehouseArtifact extends Environment {
                 }
                 addError(agName, "blocked_by_agent", "Path blocked by another agent");
                 return true; // El movimiento se intentó pero fue bloqueado, el agente puede decidir esperar o replanificar
+            } else {
+                addError(agName, "uknown", "uknown error code: " + error);
+                System.out.println("uknown error code: " + error);
             }
             return false;
         } finally {
@@ -284,8 +281,12 @@ public class WarehouseArtifact extends Environment {
         String result = model.assignTask(agName, action);
         if ("error".equals(result)) {
             return false;
-        } else if (result.equals("null")) {
+        } else if (result.equals("null_robot")) {
             return false;
+        } else if (result.equals("null_container")) {
+            return false;
+        } else if (result.equals("already_assigned")) {
+            return true;
         } else if ("no_task".equals(result)) {
             addPercept(agName, Literal.parseLiteral("no_task"));
             return true;
@@ -348,67 +349,55 @@ public class WarehouseArtifact extends Environment {
      * Agrega un error a las percepciones
      */
     private void addError(String agName, String errorType, String data) {
-        totalErrors++;
+        removePerceptsByUnif(agName, Literal.parseLiteral("error(_,_)"));
         addPercept(agName, Literal.parseLiteral(
                 "error(" + errorType + ",\"" + data + "\")"
         ));
         System.err.println("ERROR [" + agName + "]: " + errorType + " - " + data);
+        addPercept("supervisor", Literal.parseLiteral("total_errors(" + errorType + "," + totalErrors + ")"));
     }
 
     //Espaguetis a la carbornara 
     void updatePercepts() {
-        // Actualizar percepciones de posición
+        // Posiciones iniciales de los robots
+        Map<String, String> initialPositions = Map.of(
+                "lightInit", "lightInit",
+                "mediumInit", "mediumInit",
+                "heavyInit", "heavyInit"
+        );
+
+        // Estanterías
+        List<String> shelves = List.of(
+                "shelf_1", "shelf_2", "shelf_3", "shelf_4",
+                "shelf_5", "shelf_6", "shelf_7", "shelf_8", "shelf_9"
+        );
+
+        // Actualizar percepciones de todos los robots
         for (Map.Entry<String, Robot> entry : model.getRobots().entrySet()) {
             String agName = entry.getKey();
             Robot robot = entry.getValue();
             Location loc = new Location(robot.getX(), robot.getY());
 
-            if (model.getLocation("lightInit").distance(loc) == 0) {
-                addPercept(agName, Literal.parseLiteral("at(" + robot.getId() + ",lightInit)"));
+            // Verificar posiciones iniciales
+            for (Map.Entry<String, String> init : initialPositions.entrySet()) {
+                if (model.getLocation(init.getKey()).distance(loc) == 0) {
+                    addPercept(agName, Literal.parseLiteral("at(" + robot.getId() + "," + init.getValue() + ")"));
+                }
             }
-            if (model.getLocation("mediumInit").distance(loc) == 0) {
-                addPercept(agName, Literal.parseLiteral("at(" + robot.getId() + ",mediumInit)"));
-            }
-            if (model.getLocation("heavyInit").distance(loc) == 0) {
-                addPercept(agName, Literal.parseLiteral("at(" + robot.getId() + ",heavyInit)"));
-            }
+
+            // Verificar si está cerca de la entrada
             if (model.getLocation("entrance").distance(loc) <= 1) {
                 addPercept(agName, Literal.parseLiteral("at(" + robot.getId() + ",entrance)"));
             }
-            if (model.isAdjacentToShelf(agName, "shelf_1")) {
-                addPercept(agName, Literal.parseLiteral("at(" + robot.getId() + ",shelf_1)"));
-            }
-            if (model.isAdjacentToShelf(agName, "shelf_2")) {
-                addPercept(agName, Literal.parseLiteral("at(" + robot.getId() + ",shelf_2)"));
-            }
-             if (model.isAdjacentToShelf(agName, "shelf_3")) {
-                addPercept(agName, Literal.parseLiteral("at(" + robot.getId() + ",shelf_3)"));
-            }
-             if (model.isAdjacentToShelf(agName, "shelf_4")) {
-                addPercept(agName, Literal.parseLiteral("at(" + robot.getId() + ",shelf_4)"));
-            }
-            if (model.isAdjacentToShelf(agName, "shelf_5")) {
-                addPercept(agName, Literal.parseLiteral("at(" + robot.getId() + ",shelf_5)"));
-            }
-            if (model.isAdjacentToShelf(agName, "shelf_6")) {
-                addPercept(agName, Literal.parseLiteral("at(" + robot.getId() + ",shelf_6)"));
-            }
-            if (model.isAdjacentToShelf(agName, "shelf_7")) {
-                addPercept(agName, Literal.parseLiteral("at(" + robot.getId() + ",shelf_7)"));
-            }
-            if (model.isAdjacentToShelf(agName, "shelf_8")) {
-                addPercept(agName, Literal.parseLiteral("at(" + robot.getId() + ",shelf_8)"));
-            }
-            if (model.isAdjacentToShelf(agName, "shelf_9")) {
-                addPercept(agName, Literal.parseLiteral("at(" + robot.getId() + ",shelf_9)"));
-            }
 
+            // Verificar estanterías adyacentes
+            for (String shelf : shelves) {
+                if (model.isAdjacentToShelf(agName, shelf)) {
+                    addPercept(agName, Literal.parseLiteral("at(" + robot.getId() + "," + shelf + ")"));
+                }
+            }
         }
 
-        
-}
-/*
-    
- */
+    }
 
 }
