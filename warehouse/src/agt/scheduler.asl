@@ -80,7 +80,17 @@ container_queue([]).
     -robot_available(Robot);
     
     // Aquí asignamos una estantería por defecto (puedes ajustar esta lógica luego)
-    ShelfId = shelf_9; 
+        if(Weight<=20){
+        ShelfId = shelf_4;
+    
+    }else{
+        if(Weight> 20 & Weight <=50){
+            if(get_free_shelf())
+            ShelfId = shelf_5;
+        }else{
+            ShelfId = shelf_9;
+        }
+    } 
     .send(Robot, achieve, task(CId, ShelfId)).
 
 // Opción B: Si el plan anterior falla (no hay robots libres o capaces), va a la cola
@@ -125,22 +135,6 @@ container_queue([]).
 
 +!try_assign <- true.
 
-+!take_first_pair([pkg(CId,Weight,W,H,Type)|Rest], Robot, pkg(CId,Weight,W,H,Type), Rest)
-    : robot_available(Robot)
-    & robot_capacity(Robot, MaxWeight, MaxW, MaxH, _)
-    & Weight <= MaxWeight & W <= MaxW & H <= MaxH <-
-    true.
-
-+!take_first_pair([X|Rest], Robot, Item, [X|NewRest]) : true <-
-    !take_first_pair(Rest, Robot, Item, NewRest).
-
-+!take_first_pair([], _, _, _) : true <-
-    .print("No hay robot adecuado para el siguiente paquete");
-    .fail.
-
-+!dispatch(Robot, pkg(CId,Weight,W,H,Type)) : true <-
-    ShelfId = shelf_9;
-    .send(Robot, achieve, task(CId, ShelfId)).
 
 +!taskcomplete(CId, ShelfId)[source(Robot)] : true <-
     .print("Robot ", Robot, " terminó con contenedor ", CId);

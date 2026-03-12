@@ -23,7 +23,7 @@
     
     .print("Tarea completada");
 
-    !go_to(heavyInit);
+    //!go_to(heavyInit);
     .send(scheduler, achieve, taskcomplete(CId, ShelfId)).
 
 +!go_to(Location) : .my_name(X) & not at(X,Location) <-

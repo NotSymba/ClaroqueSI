@@ -23,7 +23,7 @@
 
     .print("Tarea completada");
 
-    !go_to(lightInit);
+    //!go_to(lightInit);
     .send(scheduler, achieve, taskcomplete(CId, ShelfId)).
 
 
