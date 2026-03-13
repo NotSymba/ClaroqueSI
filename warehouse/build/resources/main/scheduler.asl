@@ -29,36 +29,68 @@ robot_available(robot_medium).
 robot_available(robot_heavy).
 
 /* Contadores y estadísticas */
-total_containers_received(0).
-total_tasks_assigned(0).
-pending_containers(0).
+//total_containers_received(0).
+//total_tasks_assigned(0).
+//pending_containers(0).
+container_queue([]).
 
-// 1. Reaccionar a nuevo contenedor
+
 +new_container(CId) : true <-
-    .print("Nuevo contenedor: ", CId);
-    get_container_info(CId);
-    true.
-
-// 2. Recibir info y clasificar
-+container_info(CId, W, H, Weight, Type) : true <-
-    .print("Info: ", CId, " - ", Weight, "kg");
-    +pending_container(CId, Weight).
+    .print("Nuevo contenedor detectado en el entorno: ", CId);
+    get_container_info(CId).
 
 
-+container_info(CId, W, H, Weight, Type) : true <-
-    .print("Clasificando ", CId);
++container_info(CId, W, H, Weight, Type) 
+    : robot_available(Robot)
+    & robot_capacity(Robot, MaxWeight, MaxW, MaxH, _)
+    & Weight <= MaxWeight & W <= MaxW & H <= MaxH <-
+
+    .print("¡Asignación directa! Enviando ", CId, " a ", Robot);
+    -robot_available(Robot);
+
+    .send(Robot, achieve, handle_container(CId)).
     
-     findBestShelf(CId); 
- ;
-    // Asignar a robot apropiado
-    if (Weight <= 10) {
-        .print("Asignando a robot_light"); 
 
-        // Nota: Esta es una simplificación
-        // El scheduler debería verificar disponibilidad
-    } else if (Weight <= 30) {
-        .print("Asignando a robot_medium");
-    } else {
-        .print("Asignando a robot_heavy");
-    }
-  
+
++container_info(CId, W, H, Weight, Type) : true <-
+    .print("Ningún robot disponible para ", CId, ". Añadiendo a la cola...");
+    !enqueue(pkg(CId, Weight, W, H, Type)).
+
+
+
++!enqueue(pkg(CId, Weight, W, H, urgent)) : container_queue(Q) <-
+    -container_queue(Q);
+    +container_queue([pkg(CId, Weight, W, H, urgent) | Q]);
+    !try_assign.
+
++!enqueue(pkg(CId, Weight, W, H, Type)) : container_queue(Q) <-
+    -container_queue(Q);
+    .concat(Q, [pkg(CId, Weight, W, H, Type)], NewQ);
+    +container_queue(NewQ);
+    !try_assign.
+
++robot_available(_) : true <-
+    !try_assign.
+
+
++!try_assign : container_queue([pkg(CId, Weight, W, H, Type) | Resto])
+            & robot_available(Robot)
+            & robot_capacity(Robot, MaxWeight, MaxW, MaxH, _)
+            & Weight <= MaxWeight & W <= MaxW & H <= MaxH <-       
+
+    -container_queue([pkg(CId, Weight, W, H, Type) | Resto]);
+    +container_queue(Resto);
+
+    -robot_available(Robot);
+
+    .print("Asignando paquete ", Type, " ", CId, " a ", Robot);
+    .send(Robot, achieve, handle_container(CId));
+    
+    !try_assign.
+
++!try_assign <- true.
+
+
++!taskcomplete(CId, ShelfId)[source(Robot)] : true <-
+    .print("Robot ", Robot, " terminó con contenedor ", CId);
+    +robot_available(Robot).

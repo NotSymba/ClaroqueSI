@@ -1,27 +1,46 @@
-!start.
-
 +!start : true <-
-    .print("🤖 Robot ligero iniciado - Capacidad: 10kg, 1x1 [Ágil]");
-    .print("🔍 Iniciando secuencia de prueba de movimientos...");
-    -+state(testing);
-    !test_movement.
-    //!work_cycle.
-// Secuencia de prueba de movimientos (más rápida, zonas de estanterías pequeñas)
- 
+    .print("Robot iniciado y listo").
 
-+!test_movement : true <-
-    !go_to(heavyInit);
+
++!handle_container(CId)[source(scheduler)] : true <-
+    .print("Recibida orden del scheduler. Solicitando tarea al entorno para: ", CId);
+    assignTask(CId).
+
+
++task(CId, ShelfId) : true <-
+    -task(CId, ShelfId);
+    .print("El entorno asignó la ruta: ", CId, " -> ", ShelfId);
+    
+
+    !go_to(entrance);
     .wait(2000);
-    !go_to(shelf_1);
+
+    pickup(CId);
+    .print("Contenedor ", CId, " recogido físicamente.");
     .wait(2000);
-    !go_to(heavyInit).
+
+    !go_to(ShelfId);
+    .wait(2000);
+
+    drop_at(ShelfId);
+    .print("Contenedor depositado en ", ShelfId);
+
+
+    taskcomplete(CId, ShelfId);
+    .print("Tarea marcada como completada en el sistema.");
+
+
+    !go_to(heavyInit); 
+    
+
+    .send(scheduler, achieve, taskcomplete(CId, ShelfId)).
+
 
 +!go_to(Location) : .my_name(X) & not at(X,Location) <-
-
     move_to(Location);
-    .wait(500);
+    .wait(375);
     !go_to(Location).
-    
-+!go_to(Location) : .my_name(X) & at(X,Location) <-
-    .print(" Posición alcanzada: ", Location);
+
++!go_to(Location) : at(X,Location) <-
+    .print("Posición alcanzada: ", Location);
     +state(idle).
