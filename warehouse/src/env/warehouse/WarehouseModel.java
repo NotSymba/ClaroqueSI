@@ -560,11 +560,11 @@ public class WarehouseModel extends GridWorldModel {
             case "entrance":
                 return new Location(1, 1);
             case "lightInit":
-                return new Location(0, 7);
+                return new Location(0, 5);
             case "mediumInit":
-                return new Location(2, 7);
+                return new Location(1, 5);
             case "heavyInit":
-                return new Location(4, 7);
+                return new Location(2, 5);
             default:
                 return null;
         }
