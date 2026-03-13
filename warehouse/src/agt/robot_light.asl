@@ -10,7 +10,7 @@
  
 
 +!test_movement : true <-
-    !go_to(mediumInit);
+    !go_to(lightInit);
     .wait(1000);
     !go_to(shelf_9);
     .wait(1000);
@@ -18,7 +18,7 @@
 
 +!go_to(Location) : .my_name(X) & not at(X,Location) <-
     move_to(Location);
-    .wait(100);
+    .wait(75);
     !go_to(Location).
     
 +!go_to(Location) : at(X,Location) <-

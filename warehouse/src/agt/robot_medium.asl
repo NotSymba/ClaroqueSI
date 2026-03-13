@@ -1,3 +1,4 @@
+
 !start.
 
 +!start : true <-
@@ -21,7 +22,7 @@
 +!go_to(Location) : .my_name(X) & not at(X,Location) <-
 
     move_to(Location);
-    .wait(300);
+    .wait(225);
     !go_to(Location).
     
 +!go_to(Location) :  .my_name(X) & at(X,Location) <-
