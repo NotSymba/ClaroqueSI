@@ -15,7 +15,6 @@ public class Robot {
     private boolean busy;
     private String currentTask;
     
-    
     public Robot(String id, String type, double maxWeight, int maxWidth, int maxHeight, int speed) {
         this.id = id;
         this.type = type;
@@ -48,8 +47,6 @@ public class Robot {
     public void setBusy(boolean busy) { this.busy = busy; }
     public void setCurrentTask(String task) { this.currentTask = task; }
     
-    //get y modify del tiempo, esto es para el algoritmo de planificacion de ruta...
- 
     /**
      * Verifica si el robot puede cargar un contenedor 
      */
@@ -104,6 +101,4 @@ public class Robot {
         return String.format("Robot[%s(%s): @(%d,%d), carrying=%s, busy=%s]", 
             id, type, x, y, carrying, busy);
     }
-
-
 }

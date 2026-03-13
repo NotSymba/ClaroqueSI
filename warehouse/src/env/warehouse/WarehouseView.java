@@ -22,9 +22,8 @@ public class WarehouseView extends JFrame {
     private JTextArea shelvesArea;
     private JTextArea consoleArea;
     private JScrollPane consoleScroll;
-
+    
     public WarehouseView(WarehouseModel warehouse, int gridWidth, int gridHeight) {
-
         this.warehouse = warehouse;
         this.gridWidth = gridWidth;
         this.gridHeight = gridHeight;
