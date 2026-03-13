@@ -1,29 +1,38 @@
 +!start : true <-
-    .print("Robot medio iniciado").
+    .print("Robot iniciado y listo").
 
 
-+!task(CId, ShelfId) : true <-
-    .print("Ejecutando tarea: ", CId);
++!handle_container(CId)[source(scheduler)] : true <-
+    .print("Recibida orden del scheduler. Solicitando tarea al entorno para: ", CId);
+    assignTask(CId).
+
+
++task(CId, ShelfId) : true <-
+    -task(CId, ShelfId);
+    .print("El entorno asignó la ruta: ", CId, " -> ", ShelfId);
     
-    // Paso 1: Ir al contenedor (simplificado)
-    !go_to(entrance);  // Posición aproximada
+
+    !go_to(entrance);
     .wait(1500);
-    
-    // Paso 2: Recoger
+
     pickup(CId);
+    .print("Contenedor ", CId, " recogido físicamente.");
     .wait(1500);
-    
-    // Paso 3: Ir a estantería (simplificado)
+
     !go_to(ShelfId);
     .wait(1500);
-    
-    // Paso 4: Depositar
+
     drop_at(ShelfId);
+    .print("Contenedor depositado en ", ShelfId);
 
+
+    taskcomplete(CId, ShelfId);
+    .print("Tarea marcada como completada en el sistema.");
+
+
+    !go_to(mediumInit); 
     
-    .print("Tarea completada");
 
-    //!go_to(mediumInit);
     .send(scheduler, achieve, taskcomplete(CId, ShelfId)).
 
 
@@ -31,7 +40,7 @@
     move_to(Location);
     .wait(225);
     !go_to(Location).
-    
+
 +!go_to(Location) : at(X,Location) <-
-    .print(" Posición alcanzada: ", Location);
+    .print("Posición alcanzada: ", Location);
     +state(idle).
