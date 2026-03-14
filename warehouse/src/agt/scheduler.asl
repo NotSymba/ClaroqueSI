@@ -45,7 +45,7 @@ container_queue([]).
     & robot_capacity(Robot, MaxWeight, MaxW, MaxH, _)
     & Weight <= MaxWeight & W <= MaxW & H <= MaxH <-
 
-    .print("¡Asignación directa! Enviando ", CId, " a ", Robot);
+    .print("Asignando paquete ", Type, " ", CId, "peso:",Weight," de ",W,"x",H, " a ", Robot);
     -robot_available(Robot);
 
     .send(Robot, achieve, handle_container(CId)).
@@ -83,7 +83,7 @@ container_queue([]).
 
     -robot_available(Robot);
 
-    .print("Asignando paquete ", Type, " ", CId, " a ", Robot);
+    .print("Asignando paquete ", Type, " ", CId, "peso:",Weight," de ",W,"x",H, " a ", Robot);
     .send(Robot, achieve, handle_container(CId));
     
     !try_assign.

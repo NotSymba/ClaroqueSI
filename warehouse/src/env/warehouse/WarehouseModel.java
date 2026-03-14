@@ -30,6 +30,7 @@ public class WarehouseModel extends GridWorldModel {
     private Map<String, Container> containers;
     private Map<String, Shelf> shelves;
     //presindire de eso
+    private ConcurrentLinkedQueue<Location> toGenerateContainerCells;
     private ConcurrentLinkedQueue<Container> pendingContainers;
     private Map<String, String> taskAssignments; // containerId -> robotId
 
@@ -59,6 +60,11 @@ public class WarehouseModel extends GridWorldModel {
         pendingContainers = new ConcurrentLinkedQueue<>();
         taskAssignments = new ConcurrentHashMap<>();
         reservationTable = new ConcurrentHashMap<>();
+        toGenerateContainerCells = new ConcurrentLinkedQueue<>();
+
+        toGenerateContainerCells.addAll(Arrays.asList(
+                new Location(1, 1), new Location(0, 1), new Location(2, 1), new Location(2, 0)
+        ));
         // Inicializar grid
         initializeGrid();
 
@@ -107,16 +113,19 @@ public class WarehouseModel extends GridWorldModel {
      * Crea los robots iniciales
      */
     private void initializeRobots() {
+        Location lightLoc = getLocation("lightInit");
         Robot light = new Robot("robot_light", "light", 10, 1, 1, 3);
-        light.setPosition(1, 3);
+        light.setPosition(lightLoc.getX(), lightLoc.getY());
         robots.put("robot_light", light);
 
+        Location mediumLoc = getLocation("mediumInit");
         Robot medium = new Robot("robot_medium", "medium", 30, 1, 2, 2);
-        medium.setPosition(2, 3);
+        medium.setPosition(mediumLoc.getX(), mediumLoc.getY());
         robots.put("robot_medium", medium);
 
+        Location heavyLoc = getLocation("heavyInit");
         Robot heavy = new Robot("robot_heavy", "heavy", 100, 2, 3, 1);
-        heavy.setPosition(3, 3);
+        heavy.setPosition(heavyLoc.getX(), heavyLoc.getY());
         robots.put("robot_heavy", heavy);
     }
 
@@ -165,6 +174,9 @@ public class WarehouseModel extends GridWorldModel {
      */
     public Container newContainer() {
         Container container = generateRandomContainerFair();
+        if(container == null){
+            return null;
+        }
         containers.put(container.getId(), container);
         pendingContainers.offer(container);
 
@@ -368,6 +380,7 @@ public class WarehouseModel extends GridWorldModel {
             robot.pickup(container);
             container.setPicked(true);
             reserveAction(robot, new Location(robot.getX(), robot.getY())); // Reservar la celda por el tiempo que permaneceremos
+            toGenerateContainerCells.offer(new Location(container.getX(), container.getY())); // Liberar la posición de generación para futuros contenedores
             return 0;
 
         } catch (Exception e) {
@@ -428,7 +441,7 @@ public class WarehouseModel extends GridWorldModel {
             Shelf shelf = findBestShelf(container);
             if (shelf != null) {
                 return Literal.parseLiteral(
-                        "free_shelf(\"" + containerId + "\",\"" + shelf.getId() + "\")"
+                        "free_shelf(" + containerId + "," + shelf.getId() + ")"
                 );
             }
             //no hay estanterías disponibles, el agente debería esperar a que se libere alguna, pero por ahora solo le decimos que no hay estanterías disponibles y que lo intente de nuevo luego
@@ -555,6 +568,13 @@ public class WarehouseModel extends GridWorldModel {
             }
             return null;
         }
+        if(location.startsWith("container_")){
+            Container c = containers.get(location);
+            if(c!= null){
+                return new Location(c.getX(), c.getY());
+            }
+            return null;
+        }
 
         switch (location) {
             case "entrance":
@@ -589,7 +609,8 @@ public class WarehouseModel extends GridWorldModel {
             return null;
         }
         clearReservations(agName);
-        reservePath(robots.get(agName), camino);
+        List<Nodo> partial  = camino.subList(0, Math.min(4, camino.size())); // Reservar solo los próximos 4 pasos para mayor flexibilidad
+        reservePath(robots.get(agName), partial);
         return camino.get(1).getLoc();
     }
 
@@ -1096,9 +1117,14 @@ public class WarehouseModel extends GridWorldModel {
         } else {
             type = "urgent";
         }
+        Location entrance = toGenerateContainerCells.poll();
+        if (entrance == null) {
+            System.out.println("No more generation positions available!");
+            return null; // No hay más posiciones de generación disponibles
+        }
 
         Container container = new Container(id, width, height, weight, type);
-        container.setPosition(1, 1);
+        container.setPosition(entrance.getX(), entrance.getY());
 
         return container;
     }

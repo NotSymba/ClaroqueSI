@@ -12,7 +12,7 @@
     .print("El entorno asignó la ruta: ", CId, " -> ", ShelfId);
     
 
-    !go_to(entrance);
+    !go_to(CId);
     .wait(1500);
 
     pickup(CId);

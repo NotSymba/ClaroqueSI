@@ -12,7 +12,7 @@
     .print("El entorno asignó la ruta: ", CId, " -> ", ShelfId);
     
 
-    !go_to(entrance);
+    !go_to(CId);
     .wait(2000);
 
     pickup(CId);
@@ -44,11 +44,10 @@
     get_free_shelf(CId). 
 
 
-+free_shelf(CId, NewShelfIdString) : true <-
-    -free_shelf(CId, NewShelfIdString);
-    .term2string(NewShelfIdAtom, NewShelfIdString);
-    .print("Nueva estantería alternativa recibida: ", NewShelfIdAtom, ". Reintentando entrega...");
-    !deliver_container(CId, NewShelfIdAtom).
++free_shelf(CId, NewShelf) : true <-
+    -free_shelf(CId, NewShelf); 
+    .print("Nueva estantería alternativa recibida: ", NewShelf, ". Reintentando entrega...");
+    !deliver_container(CId, NewShelf).
 
 +!go_to(Location) : .my_name(X) & not at(X,Location) <-
     move_to(Location);

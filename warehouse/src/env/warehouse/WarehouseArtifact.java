@@ -80,6 +80,10 @@ public class WarehouseArtifact extends Environment {
 
                     // Generar contenedor aleatorio
                     Container container = model.newContainer(); // Notificar al modelo para que actualice su estado
+                    if (container == null) {
+                        addError("supervisor", "container_generation_failed", "Failed to generate new container");
+                        continue; // Si no se pudo generar un contenedor, intentar de nuevo
+                    }
 
                     if (view != null) {
                         view.logMessage(String.format("New container: %s (%.1fkg, %s)",
@@ -215,6 +219,7 @@ public class WarehouseArtifact extends Environment {
             }
             return false;
         } finally {
+ 
             removePerceptsByUnif(agName, Literal.parseLiteral("at(_,_)"));
             updatePercepts();
         }
@@ -382,6 +387,11 @@ public class WarehouseArtifact extends Environment {
             for (Map.Entry<String, String> init : initialPositions.entrySet()) {
                 if (model.getLocation(init.getKey()).distance(loc) == 0) {
                     addPercept(agName, Literal.parseLiteral("at(" + robot.getId() + "," + init.getValue() + ")"));
+                }
+            }
+            for(Container container : model.getContainers().values()){
+                if(model.getLocation(container.getId()).distance(loc)==1){
+                    addPercept(agName, Literal.parseLiteral("at(" + robot.getId() + "," + container.getId() + ")"));
                 }
             }
 
