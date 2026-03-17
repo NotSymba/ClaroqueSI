@@ -83,7 +83,8 @@ fastest_available(Robot, Weight,W, H) :-
 +!try_assign : container_queue([pkg(CId, Weight, W, H, Type) | Resto])
             & fastest_available(Robot, Weight, W, H) <-
  
-    -+container_queue(Resto);
+    -container_queue(_);
+    +container_queue(Resto);
     -robot_available(Robot);
 
     .print("Asignando paquete ", Type, " ", CId, "peso:",Weight," de ",W,"x",H, " a ", Robot);
