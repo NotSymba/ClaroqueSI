@@ -43,11 +43,11 @@
     .print("¡Error! No se pudo depositar en ", ShelfId, ". Solicitando nueva estantería al entorno...");
     get_free_shelf(CId). 
 
-+free_shelf(CId, NewShelfIdString) : true <-
-    -free_shelf(CId, NewShelfIdString);
-    .term2string(NewShelfIdAtom, NewShelfIdString);
-    .print("Nueva estantería alternativa recibida: ", NewShelfIdAtom, ". Reintentando entrega...");
-    !deliver_container(CId, NewShelfIdAtom).
++free_shelf(CId, NewShelf) : true <-
+    -free_shelf(CId, NewShelf);
+ 
+    .print("Nueva estantería alternativa recibida: ", NewShelf, ". Reintentando entrega...");
+    !deliver_container(CId, NewShelf).
 
 
 +!go_to(Location) : .my_name(X) & not at(X,Location) <-

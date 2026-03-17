@@ -34,6 +34,16 @@ robot_available(robot_heavy).
 //pending_containers(0).
 container_queue([]).
 
+fastest_available(Robot, Weight,W, H) :-
+    robot_available(Robot)
+    & robot_capacity(Robot, MaxWeight, MaxW, MaxH, Speed)
+    & Weight <= MaxWeight & W <= MaxW & H <= MaxH
+    & not (
+        robot_available(Other)
+        & robot_capacity(Other, MW2, MW3, MW4, Speed2)
+        & Weight <= MW2 & W <= MW3 & H <= MW4
+        & Speed2 > Speed
+    ).
 
 +new_container(CId) : true <-
     .print("Nuevo contenedor detectado en el entorno: ", CId);
@@ -41,9 +51,7 @@ container_queue([]).
 
 
 +container_info(CId, W, H, Weight, Type) 
-    : robot_available(Robot)
-    & robot_capacity(Robot, MaxWeight, MaxW, MaxH, _)
-    & Weight <= MaxWeight & W <= MaxW & H <= MaxH <-
+    : fastest_available(Robot, Weight,W, H) <-
 
     .print("Asignando paquete ", Type, " ", CId, "peso:",Weight," de ",W,"x",H, " a ", Robot);
     -robot_available(Robot);
@@ -72,15 +80,10 @@ container_queue([]).
 +robot_available(_) : true <-
     !try_assign.
 
-
 +!try_assign : container_queue([pkg(CId, Weight, W, H, Type) | Resto])
-            & robot_available(Robot)
-            & robot_capacity(Robot, MaxWeight, MaxW, MaxH, _)
-            & Weight <= MaxWeight & W <= MaxW & H <= MaxH <-       
-
-    -container_queue([pkg(CId, Weight, W, H, Type) | Resto]);
-    +container_queue(Resto);
-
+            & fastest_available(Robot, Weight, W, H) <-
+ 
+    -+container_queue(Resto);
     -robot_available(Robot);
 
     .print("Asignando paquete ", Type, " ", CId, "peso:",Weight," de ",W,"x",H, " a ", Robot);

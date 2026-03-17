@@ -294,7 +294,9 @@ public class WarehouseModel extends GridWorldModel {
                 return 3; // Destino ocupado
             }
             robot.setPosition(nextStep.getX(), nextStep.getY());
-
+            if(escacharPaquete(agName) != null){
+                return 5; 
+            }
             return 0;
 
         } catch (Exception e) {
@@ -371,7 +373,7 @@ public class WarehouseModel extends GridWorldModel {
             }
 
             // Verificar distancia a la zona de entrada
-            if (robot.distanceTo(1, 1) > 2) {
+            if (robot.distanceTo(container.getX(), container.getY()) > 1) {
                 totalErrors++;
                 return 3;
             }
@@ -675,7 +677,7 @@ public class WarehouseModel extends GridWorldModel {
                     continue;
                 }
 
-                int g = actual.getG() + moveTime + penaltyRobotsNearby(agName, nx, ny);
+                int g = actual.getG() + moveTime + penalty(agName, nx, ny);
                 if (bestG.containsKey(nextLoc) && bestG.get(nextLoc) <= g) {
                     continue;
                 }
@@ -715,14 +717,16 @@ public class WarehouseModel extends GridWorldModel {
         return true; // Permitimos celdas ocupadas
     }
 
-    private int penaltyRobotsNearby(String agName, int x, int y) {
+    private int penalty(String agName, int x, int y) {
         Robot self = robots.get(agName);
         if (self == null) {
             return 0;
         }
 
         int penalty = 0;
-
+        if(grid[x][y] == CellType.ENTRANCE){
+            penalty += 50; // penalización por intentar pasar por la entrada, aunque no esté bloqueada, para que el robot intente rodearla
+        }
         for (Robot r : robots.values()) {
             if (!r.getId().equals(agName)) {
                 int dist = r.distanceTo(x, y);
@@ -1140,5 +1144,17 @@ public class WarehouseModel extends GridWorldModel {
             default:
                 throw new AssertionError();
         }
+    }
+
+    private String escacharPaquete(String rid) {
+        Robot r = robots.get(rid);
+        for(Container c: containers.values()){
+            if(c.getX() == r.getX() && c.getY() == r.getY() && !c.isPicked()){
+                containers.remove(c.getId());
+                System.out.println("Paquete " + c.getId() + " escachado por " + r.getId());
+                return c.getId();
+            }
+        }
+        return null;
     }
 }

@@ -26,11 +26,8 @@ public class WarehouseArtifact extends Environment {
     private WarehouseModel model;
 
     // Contadores para generar IDs
- 
     // Métricas
- 
     private int totalErrors = 0;
- 
 
     private WarehouseView view;
 
@@ -213,13 +210,18 @@ public class WarehouseArtifact extends Environment {
                 }
                 addError(agName, "blocked_by_agent", "Path blocked by another agent");
                 return true; // El movimiento se intentó pero fue bloqueado, el agente puede decidir esperar o replanificar
+            }
+            if (error == 5) {
+                addError(agName, "splashContainer", "splash container error: ");
+                System.out.println("splash container error: se aplasto un contenedor, el robot se siente tan mal que ha decidido no moverse nunca mas");
+                return false;
             } else {
                 addError(agName, "uknown", "uknown error code: " + error);
                 System.out.println("uknown error code: " + error);
             }
             return false;
         } finally {
- 
+
             removePerceptsByUnif(agName, Literal.parseLiteral("at(_,_)"));
             updatePercepts();
         }
@@ -237,7 +239,7 @@ public class WarehouseArtifact extends Environment {
                 view.logMessage(String.format("🤖 %s picked up %s", agName, containerId));
                 view.update();
             }
-            removePerceptsByUnif(agName, Literal.parseLiteral("stored(_,_)"));
+
             addPercept(agName, Literal.parseLiteral("picked(\"" + containerId + "\")"));
             return true;
         } else if (error == 1) {
@@ -257,20 +259,23 @@ public class WarehouseArtifact extends Environment {
     private boolean executeDropAt(String agName, Structure action) {
         String shelfId = action.getTerm(0).toString().replace("\"", "");
         int error = model.dropContainer(agName, action);
-
+        Robot robot = model.getRobots().get(agName);
         if (error == 0) {
             if (view != null) {
-                Robot robot = model.getRobots().get(agName);
-                view.logMessage(String.format("%s stored at %s", agName, shelfId));
+
+                view.logMessage(String.format("%s stored %s at %s", agName, robot.getLastContainerID(), shelfId));
                 view.update();
             }
-            removePerceptsByUnif(agName, Literal.parseLiteral("carrying(_)"));
-            addPercept(agName, Literal.parseLiteral("dropped(\"" + shelfId + "\")"));
+            removePerceptsByUnif(agName, Literal.parseLiteral("picked(_)"));
+            //PLANTEAR SOLUCION:
+            addPercept(agName, Literal.parseLiteral("stored(" + shelfId + "," + robot.getLastContainerID() + ")"));
+            // addPercept(agName, Literal.parseLiteral("dropped(\"" + shelfId + "\")"));
             return true;
         } else if (error == 1) {
             addError(agName, "invalid_drop", "Robot or shelf not found");
         } else if (error == 2) {
             addError(agName, "not_carrying", "Robot is not carrying anything");
+            return true;
         } else if (error == 3) {
             addError(agName, "too_far", "Shelf too far away");
         } else if (error == 4) {
@@ -296,7 +301,7 @@ public class WarehouseArtifact extends Environment {
             addPercept(agName, Literal.parseLiteral("no_task"));
             return true;
         } else if ("cannot_carry".equals(result)) {
-            addPercept(agName, Literal.parseLiteral("cannot_carry"));
+            addError(agName, "cannot_carry", "this robot cannot carry the assigned container");
             return true;
         } else if ("no_shelf_available".equals(result)) {
             addError(agName, "no_shelf_available", "No shelf available for container");
@@ -306,6 +311,7 @@ public class WarehouseArtifact extends Environment {
                 view.logMessage(String.format("%s assigned task: %s", agName, result.toString()));
                 view.update();
             }
+            removePerceptsByUnif(agName, Literal.parseLiteral("no_task"));
             addPercept(agName, Literal.parseLiteral(result));
             return true;
         }
@@ -389,8 +395,8 @@ public class WarehouseArtifact extends Environment {
                     addPercept(agName, Literal.parseLiteral("at(" + robot.getId() + "," + init.getValue() + ")"));
                 }
             }
-            for(Container container : model.getContainers().values()){
-                if(model.getLocation(container.getId()).distance(loc)==1){
+            for (Container container : model.getContainers().values()) {
+                if (model.getLocation(container.getId()).distance(loc) == 1) {
                     addPercept(agName, Literal.parseLiteral("at(" + robot.getId() + "," + container.getId() + ")"));
                 }
             }

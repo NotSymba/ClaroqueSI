@@ -12,6 +12,7 @@ public class Robot {
     private final int speed; // velocidad (alta=3, media=2, baja=1)
     private int x, y;
     private Container carriedContainer;
+    private String lastContainerID;
     private boolean busy;
     private String currentTask;
     
@@ -42,7 +43,8 @@ public class Robot {
     public Container getCarriedContainer() { return carriedContainer; }
     public boolean isBusy() { return busy; }
     public String getCurrentTask() { return currentTask; }
-    
+    public String getLastContainerID() { return lastContainerID; }
+
     // Setters
     public void setPosition(int x, int y) { this.x = x; this.y = y; }
     public void setBusy(boolean busy) { this.busy = busy; }
@@ -80,6 +82,7 @@ public class Robot {
     public Container drop() {
         Container container = this.carriedContainer;
         this.carriedContainer = null;
+        this.lastContainerID = container.getId();
         return container;
     }
     
