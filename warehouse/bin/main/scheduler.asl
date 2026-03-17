@@ -34,22 +34,10 @@ robot_available(robot_heavy).
 //pending_containers(0).
 container_queue([]).
 
-/*
-fastest_available(Robot, Weight,W, H) :-
-    robot_available(Robot)
-    & robot_capacity(Robot, MaxWeight, MaxW, MaxH, Speed)
-    & Weight <= MaxWeight & W <= MaxW & H <= MaxH
-    & not (
-        robot_available(Other)
-        & robot_capacity(Other, MW2, MW3, MW4, Speed2)
-        & Weight <= MW2 & W <= MW3 & H <= MW4
-        & Speed2 > Speed
-    ).
-*/
+
 +new_container(CId) : true <-
     .print("Nuevo contenedor detectado en el entorno: ", CId);
     get_container_info(CId).
-
 
 
 +container_info(CId, W, H, Weight, Type) 

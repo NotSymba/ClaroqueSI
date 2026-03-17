@@ -365,6 +365,9 @@ public class WarehouseArtifact extends Environment {
                 "error(" + errorType + ",\"" + data + "\")"
         ));
         System.err.println("ERROR [" + agName + "]: " + errorType + " - " + data);
+
+        totalErrors++;
+
         addPercept("supervisor", Literal.parseLiteral("total_errors(" + errorType + "," + totalErrors + ")"));
     }
 

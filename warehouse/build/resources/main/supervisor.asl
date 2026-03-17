@@ -34,3 +34,66 @@ system_start_time(0).
 max_errors_per_minute(10).
 max_consecutive_errors(5).
 
+/* Añade a tus creencias iniciales */
+total_received(0).
+total_stored(0).
+
+!start.
+
++!start : true <-
+    .print("Supervisor iniciado y monitorizando el almacén...").
+
++new_container(CId) : total_received(N) <-
+    -+total_received(N+1);
+    .print("Nuevo contenedor detectado por supervisor. Total recibidos: ", N+1).
+
+
++container_stored(CId, ShelfId)[source(Robot)] : total_stored(N) <-
+    -+total_stored(N+1);
+    .print("Supervisor anota: ", Robot, " almacenó ", CId, " en ", ShelfId, ". Total almacenados: ", N+1);
+    !calculate_statistics.
+
++!calculate_statistics : total_received(R) & total_stored(S) & R > 0 <-
+    SuccessRate = (S / R) * 100;
+    .print("--- ESTADÍSTICAS GLOBALES ---");
+    .print("Recibidos: ", R, " | Almacenados: ", S, " | Tasa de éxito: ", SuccessRate, "%").
+
+
++robot_status(State)[source(Robot)] <-
+    -+status_of(Robot, State);
+    .print("Monitor: El robot ", Robot, " ha cambiado su estado a ", State).
+
+
++total_errors(ErrorType, GlobalTotal) <-
+    -+total_errors(GlobalTotal);
+    
+    !update_specific_error(ErrorType);
+    
+    .print("ALERTA: El entorno reporta un error de tipo '", ErrorType, "'. Total global acumulado: ", GlobalTotal);
+    
+    !check_stop(GlobalTotal).
+
++!update_specific_error(Type) : errors_by_type(Type, OldCount) <-
+    -+errors_by_type(Type, OldCount + 1).
+
++!update_specific_error(Type) : true <-
+    +errors_by_type(Type, 1).
+
++!check_stop(Total) : max_consecutive_errors(Max) & Total >= Max <-
+    .print("¡ALERTA CRÍTICA! Se han alcanzado ", Total, " errores globales (Límite tolerado: ", Max, ").");
+    .print("================ REPORTE FINAL DE ERRORES ================");
+    
+    for ( errors_by_type(EType, ECount) ) {
+        if (ECount > 0) {
+            .print(" -> ", EType, " : ", ECount, " veces");
+        }
+    };
+    
+    .print("==========================================================");
+    .print("Deteniendo el sistema por seguridad...");
+    .wait(10000);
+    .stopMAS.
+
++!check_stop(Total) : true <- 
+    true.
+

@@ -37,7 +37,8 @@
 
     !go_to(lightInit);
 
-    .send(scheduler, achieve, taskcomplete(CId, ShelfId)).
+    .send(scheduler, achieve, taskcomplete(CId, ShelfId));
+    .send(supervisor, tell, container_stored(CId, ShelfId)).
 
 -!deliver_container(CId, ShelfId) : true <-
     .print("¡Error! No se pudo depositar en ", ShelfId, ". Solicitando nueva estantería al entorno...");
@@ -57,4 +58,5 @@
 
 +!go_to(Location) : at(X,Location) <-
     .print("Posición alcanzada: ", Location);
-    +state(idle).
+    +state(idle);
+    .send(supervisor, tell, robot_status(idle)).
