@@ -166,7 +166,7 @@ public class WarehouseModel extends GridWorldModel {
                 }
             }
         }
-        System.out.println("Shelves keys: " + shelves.keySet());
+        
     }
 
     /**
@@ -468,11 +468,11 @@ public class WarehouseModel extends GridWorldModel {
 
             // Agregar percepción con información del contenedor
             Literal toRet = Literal.parseLiteral(
-                    "container_info(\"" + containerId + "\","
+                    "container_info(" + containerId + ","
                     + container.getWidth() + ","
                     + container.getHeight() + ","
-                    + container.getWeight() + ",\""
-                    + container.getType() + "\")"
+                    + container.getWeight() + ","
+                    + container.getType() +")"
             );
 
             return toRet;
@@ -725,7 +725,7 @@ public class WarehouseModel extends GridWorldModel {
 
         int penalty = 0;
         if(grid[x][y] == CellType.ENTRANCE){
-            penalty += 50; // penalización por intentar pasar por la entrada, aunque no esté bloqueada, para que el robot intente rodearla
+            penalty += 505; // penalización por intentar pasar por la entrada, aunque no esté bloqueada, para que el robot intente rodearla
         }
         for (Robot r : robots.values()) {
             if (!r.getId().equals(agName)) {
@@ -1123,6 +1123,7 @@ public class WarehouseModel extends GridWorldModel {
         }
         Location entrance = toGenerateContainerCells.poll();
         if (entrance == null) {
+            totalErrors++;
             System.out.println("No more generation positions available!");
             return null; // No hay más posiciones de generación disponibles
         }

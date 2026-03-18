@@ -87,15 +87,11 @@ public class WarehouseArtifact extends Environment {
                                 container.getId(), container.getWeight(), container.getType()));
                         view.update();
                     }
+                    // Notificar al gentes
+                    addPercept("scheduler",Literal.parseLiteral("new_container(\"" + container.getId() + "\")"));
+                    addPercept("supervisor",Literal.parseLiteral("new_container(\"" + container.getId() + "\")"));
 
-                    /**
-                     * *********************************************************************************************************
-                     */
-                    // Notificar a los agentes
-                    addPercept(Literal.parseLiteral("new_container(\"" + container.getId() + "\")"));
-                    /**
-                     * *********************************************************************************************************
-                     */
+
 
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
@@ -147,12 +143,6 @@ public class WarehouseArtifact extends Environment {
                     return executeGetContainerInfo(agName, action);
                 case "get_free_shelf":
                     return executeGetFreeShelf(agName, action);
-                //no lo vamos a usar
-                /*
-                    case "scan_surroundings":
-                    return executeScanSurroundings(agName, action);
-                 */
-
                 case "taskcomplete":
                     return executeTaskComplete(agName, action);
                 default:
@@ -171,11 +161,9 @@ public class WarehouseArtifact extends Environment {
         boolean correct = model.taskComplete(agName, action);
 
         if (correct) {
-            addPercept(agName, Literal.parseLiteral("task_completed(\"" + containerId + "\",\"" + shelfId + "\")"));
-            if (view != null) {
-                view.logMessage(String.format("%s completed task for %s at %s", agName, containerId, shelfId));
-                view.update();
-            }
+            removePerceptsByUnif(agName, Literal.parseLiteral("task(_,_)"));
+            addPercept("scheduler", Literal.parseLiteral("task_completed(\"" + agName + "\",\"" + containerId + "\",\"" + shelfId + "\")"));
+            viewAct(String.format("%s completed task for %s at %s", agName, containerId, shelfId));
         } else {
             addError(agName, "task_complete_failed", "Failed to complete task for " + containerId);
         }
@@ -190,34 +178,19 @@ public class WarehouseArtifact extends Environment {
             int error = model.moveTo(agName, action);
             String destination = action.getTerm(0).toString().replace("\"", "");
             if (error == 0) {
-                if (view != null) {
-                    view.logMessage(String.format("%s moving to %s", agName, destination));
-                    view.update();
-                }
+                viewAct(String.format("%s moved to %s", agName, destination));
                 return true;
             } else if (error == 1) {
-                if (view != null) {
-                    view.logMessage(String.format("invalid_destination: %s", destination));
-                    view.update();
-                }
                 addError(agName, "invalid_destination", "Unknown destination: " + destination);
                 return false;
-
             } else if (error == 3) {
-                if (view != null) {
-                    view.logMessage(String.format("blocked_by_agent: %s", destination));
-                    view.update();
-                }
                 addError(agName, "blocked_by_agent", "Path blocked by another agent");
                 return true; // El movimiento se intentó pero fue bloqueado, el agente puede decidir esperar o replanificar
             }
             if (error == 5) {
                 addError(agName, "splashContainer", "splash container error: ");
-                System.out.println("splash container error: se aplasto un contenedor, el robot se siente tan mal que ha decidido no moverse nunca mas");
-                return false;
             } else {
                 addError(agName, "uknown", "uknown error code: " + error);
-                System.out.println("uknown error code: " + error);
             }
             return false;
         } finally {
@@ -235,15 +208,10 @@ public class WarehouseArtifact extends Environment {
         int error = model.pickUp(agName, action);
         String containerId = action.getTerm(0).toString().replace("\"", "");
         if (error == 0) {
-            if (view != null) {
-                view.logMessage(String.format("🤖 %s picked up %s", agName, containerId));
-                view.update();
-            }
-
+            viewAct(String.format("%s picked up %s", agName, containerId));
             addPercept(agName, Literal.parseLiteral("picked(\"" + containerId + "\")"));
             return true;
         } else if (error == 1) {
-
             addError(agName, "invalid_pick", "Robot or container not found");
         } else if (error == 2) {
             addError(agName, "already_carrying", "Robot is already carrying something");
@@ -261,15 +229,9 @@ public class WarehouseArtifact extends Environment {
         int error = model.dropContainer(agName, action);
         Robot robot = model.getRobots().get(agName);
         if (error == 0) {
-            if (view != null) {
-
-                view.logMessage(String.format("%s stored %s at %s", agName, robot.getLastContainerID(), shelfId));
-                view.update();
-            }
+            viewAct(String.format("%s dropped container at %s", agName, shelfId));
             removePerceptsByUnif(agName, Literal.parseLiteral("picked(_)"));
-            //PLANTEAR SOLUCION:
             addPercept(agName, Literal.parseLiteral("stored(" + shelfId + "," + robot.getLastContainerID() + ")"));
-            // addPercept(agName, Literal.parseLiteral("dropped(\"" + shelfId + "\")"));
             return true;
         } else if (error == 1) {
             addError(agName, "invalid_drop", "Robot or shelf not found");
@@ -307,15 +269,11 @@ public class WarehouseArtifact extends Environment {
             addError(agName, "no_shelf_available", "No shelf available for container");
             return true;
         } else {
-            if (view != null) {
-                view.logMessage(String.format("%s assigned task: %s", agName, result.toString()));
-                view.update();
-            }
+            viewAct(String.format("%s assigned task: %s", agName, result.toString()));
             removePerceptsByUnif(agName, Literal.parseLiteral("no_task"));
             addPercept(agName, Literal.parseLiteral(result));
             return true;
         }
-
     }
 
     /**
@@ -325,11 +283,11 @@ public class WarehouseArtifact extends Environment {
     private boolean executeGetContainerInfo(String agName, Structure action) {
         Literal containerInfo = model.getContainerInfo(agName, action); // Implementar si es necesario
         if (containerInfo != null) {
-            view.logMessage(String.format("%s requested info for %s: %s", agName, action.getTerm(0).toString(), containerInfo.toString()));
+            viewAct(String.format("%s requested info for %s: %s", agName, action.getTerm(0).toString(), containerInfo.toString()));
             addPercept(agName, containerInfo);
             return true;
         } else {
-            view.logMessage(String.format("%s requested info for %s: not found", agName, action.getTerm(0).toString()));
+            viewAct(String.format("%s requested info for %s: not found", agName, action.getTerm(0).toString()));
             addError(agName, "container_not_found", action.getTerm(0).toString());
             return false;
         }
@@ -348,14 +306,6 @@ public class WarehouseArtifact extends Environment {
         return false;
     }
 
-    /**
-     * Acción: scan_surroundings() Escanea las celdas alrededor del robot
-     */
-    /*No lo vamos a usar
-    private boolean executeScanSurroundings(String agName, Structure action) {
-        return model.scanSurroundings;
-    }
-     */
     /**
      * Agrega un error a las percepciones
      */
@@ -403,12 +353,10 @@ public class WarehouseArtifact extends Environment {
                     addPercept(agName, Literal.parseLiteral("at(" + robot.getId() + "," + container.getId() + ")"));
                 }
             }
-
             // Verificar si está cerca de la entrada
             if (model.getLocation("entrance").distance(loc) <= 1) {
                 addPercept(agName, Literal.parseLiteral("at(" + robot.getId() + ",entrance)"));
             }
-
             // Verificar estanterías adyacentes
             for (String shelf : shelves) {
                 if (model.isAdjacentToShelf(agName, shelf)) {
@@ -417,6 +365,13 @@ public class WarehouseArtifact extends Environment {
             }
         }
 
+    }
+
+    private void viewAct(String message) {
+        if (view != null) {
+            view.logMessage(message);
+            view.update();
+        }
     }
 
 }
