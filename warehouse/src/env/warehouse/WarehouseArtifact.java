@@ -88,9 +88,11 @@ public class WarehouseArtifact extends Environment {
                         view.update();
                     }
                     // Notificar al gentes
+                    removePerceptsByUnif("scheduler",Literal.parseLiteral("new_container(_)"));
+                    removePerceptsByUnif("supervisor",Literal.parseLiteral("new_container(_)"));
                     addPercept("scheduler",Literal.parseLiteral("new_container(\"" + container.getId() + "\")"));
                     addPercept("supervisor",Literal.parseLiteral("new_container(\"" + container.getId() + "\")"));
-
+                    
 
 
                 } catch (InterruptedException e) {
