@@ -12,9 +12,9 @@ MAS warehouse {
 
     agents:
         // Agentes reponedores - uno de cada tipo
-       robot_light [beliefs="robot_type(light)", beliefs="max_weight(10)", beliefs="max_size(1,1)"];
-        robot_medium [beliefs="robot_type(medium)", beliefs="max_weight(30)", beliefs="max_size(1,2)"];
-        robot_heavy [beliefs="robot_type(heavy)", beliefs="max_weight(100)", beliefs="max_size(2,3)"];
+       robot_light [beliefs="robot_type(light)", beliefs="max_weight(10)", beliefs="max_size(1,1)", beliefs="state(idle)"];
+        robot_medium [beliefs="robot_type(medium)", beliefs="max_weight(30)", beliefs="max_size(1,2)", beliefs="state(idle)"];
+        robot_heavy [beliefs="robot_type(heavy)", beliefs="max_weight(100)", beliefs="max_size(2,3)", beliefs="state(idle)"];
         
         // Agente planificador/scheduler
         scheduler;

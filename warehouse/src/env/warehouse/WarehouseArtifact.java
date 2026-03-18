@@ -231,7 +231,6 @@ public class WarehouseArtifact extends Environment {
         if (error == 0) {
             viewAct(String.format("%s dropped container at %s", agName, shelfId));
             removePerceptsByUnif(agName, Literal.parseLiteral("picked(_)"));
-            addPercept(agName, Literal.parseLiteral("stored(" + shelfId + "," + robot.getLastContainerID() + ")"));
             return true;
         } else if (error == 1) {
             addError(agName, "invalid_drop", "Robot or shelf not found");
@@ -315,9 +314,7 @@ public class WarehouseArtifact extends Environment {
                 "error(" + errorType + ",\"" + data + "\")"
         ));
         System.err.println("ERROR [" + agName + "]: " + errorType + " - " + data);
-
         totalErrors++;
-
         addPercept("supervisor", Literal.parseLiteral("total_errors(" + errorType + "," + totalErrors + ")"));
     }
 
@@ -335,7 +332,6 @@ public class WarehouseArtifact extends Environment {
                 "shelf_1", "shelf_2", "shelf_3", "shelf_4",
                 "shelf_5", "shelf_6", "shelf_7", "shelf_8", "shelf_9"
         );
-
         // Actualizar percepciones de todos los robots
         for (Map.Entry<String, Robot> entry : model.getRobots().entrySet()) {
             String agName = entry.getKey();
@@ -352,10 +348,6 @@ public class WarehouseArtifact extends Environment {
                 if (model.getLocation(container.getId()).distance(loc) == 1) {
                     addPercept(agName, Literal.parseLiteral("at(" + robot.getId() + "," + container.getId() + ")"));
                 }
-            }
-            // Verificar si está cerca de la entrada
-            if (model.getLocation("entrance").distance(loc) <= 1) {
-                addPercept(agName, Literal.parseLiteral("at(" + robot.getId() + ",entrance)"));
             }
             // Verificar estanterías adyacentes
             for (String shelf : shelves) {
