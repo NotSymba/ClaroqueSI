@@ -1,49 +1,34 @@
 package warehouse;
-
+ 
 import jason.asSyntax.*;
 import jason.environment.Environment;
-//import jason.environment.grid.Location;
-import utils.Nodo;
 import utils.Location;
-
+ 
 import java.util.*;
 import java.util.concurrent.*;
-import java.util.stream.Collectors;
-
-import javax.print.DocFlavor.STRING;
-
-/**
- * Artefacto del almacén automatizado Proporciona la API para que los agentes
- * interactúen con el entorno
- */
+ 
 public class WarehouseArtifact extends Environment {
-
-    // Dimensiones del almacén
+ 
     private static final int GRID_WIDTH = 20;
     private static final int GRID_HEIGHT = 15;
-
-    // GUI visual
+ 
     private WarehouseModel model;
-
-    // Contadores para generar IDs
-    // Métricas
-    private int totalErrors = 0;
-
     private WarehouseView view;
-
+ 
+    private int totalErrors = 0;
+ 
     private ExecutorService containerGeneratorExecutor;
     private volatile boolean running = true;
-
+ 
     @Override
     public void init(String[] args) {
         super.init(args);
-        // Inicializar modelo
+ 
         model = new WarehouseModel();
-
+ 
         view = new WarehouseView(model, GRID_WIDTH, GRID_HEIGHT);
         view.setVisible(true);
-
-        // Mensaje de bienvenida en la consola
+ 
         view.logMessage("========================================");
         view.logMessage(" Warehouse Management System Initialized");
         view.logMessage("   Grid: " + GRID_WIDTH + "x" + GRID_HEIGHT);
@@ -51,50 +36,48 @@ public class WarehouseArtifact extends Environment {
         view.logMessage("   Shelves: " + model.getShelves().size());
         view.logMessage("========================================");
         view.logMessage("");
-
-        // Iniciar generador de contenedores
+ 
         startContainerGenerator();
-        // Agregar shutdown hook para limpieza apropiada
         Runtime.getRuntime().addShutdownHook(new Thread(this::stop));
     }
-
+ 
+    // -------------------------------------------------------------------------
+    // GENERADOR DE CONTENEDORES
+    // -------------------------------------------------------------------------
+ 
     private void startContainerGenerator() {
         containerGeneratorExecutor = Executors.newSingleThreadExecutor(r -> {
             Thread t = new Thread(r, "ContainerGenerator");
             t.setDaemon(true);
             return t;
         });
-
+ 
         containerGeneratorExecutor.submit(() -> {
             Random rand = new Random();
             while (running) {
                 try {
-                    Thread.sleep(5000 + rand.nextInt(5000)); // Entre 5 y 10 segundos
-
-                    if (!running) {
-                        break;
-                    }
-
-                    // Generar contenedor aleatorio
-                    Container container = model.newContainer(); // Notificar al modelo para que actualice su estado
+                    Thread.sleep(5000 + rand.nextInt(5000));
+ 
+                    if (!running) break;
+ 
+                    Container container = model.newContainer();
                     if (container == null) {
                         addError("supervisor", "container_generation_failed", "Failed to generate new container");
-                        continue; // Si no se pudo generar un contenedor, intentar de nuevo
+                        continue;
                     }
-
+ 
                     if (view != null) {
                         view.logMessage(String.format("New container: %s (%.1fkg, %s)",
                                 container.getId(), container.getWeight(), container.getType()));
                         view.update();
                     }
-                    // Notificar al gentes
-                    removePerceptsByUnif("scheduler",Literal.parseLiteral("new_container(_)"));
-                    removePerceptsByUnif("supervisor",Literal.parseLiteral("new_container(_)"));
-                    addPercept("scheduler",Literal.parseLiteral("new_container(\"" + container.getId() + "\")"));
-                    addPercept("supervisor",Literal.parseLiteral("new_container(\"" + container.getId() + "\")"));
-                    
-
-
+ 
+                    // Notificar a scheduler y supervisor, reemplazando percepción anterior
+                    removePerceptsByUnif("scheduler", Literal.parseLiteral("new_container(_)"));
+                    removePerceptsByUnif("supervisor", Literal.parseLiteral("new_container(_)"));
+                    addPercept("scheduler", Literal.parseLiteral("new_container(\"" + container.getId() + "\")"));
+                    addPercept("supervisor", Literal.parseLiteral("new_container(\"" + container.getId() + "\")"));
+ 
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     break;
@@ -105,11 +88,11 @@ public class WarehouseArtifact extends Environment {
             System.out.println("Container generator stopped");
         });
     }
-
+ 
     public void stop() {
         System.out.println("Stopping warehouse environment...");
         running = false;
-
+ 
         if (containerGeneratorExecutor != null) {
             containerGeneratorExecutor.shutdown();
             try {
@@ -121,32 +104,38 @@ public class WarehouseArtifact extends Environment {
                 Thread.currentThread().interrupt();
             }
         }
-
+ 
         System.out.println("Warehouse environment stopped");
     }
-
-    //ESTO ES IMPORTANTE AQIO SE DEFINEN LAS ACCIONES QUE LOS AGENTES HACEN CON EL ENTORNO
+ 
+    // -------------------------------------------------------------------------
+    // DISPATCH DE ACCIONES
+    // -------------------------------------------------------------------------
+ 
     @Override
-    public boolean executeAction(String agName, Structure action
-    ) {
+    public boolean executeAction(String agName, Structure action) {
         try {
             String actionName = action.getFunctor();
-
+ 
             switch (actionName) {
-                case "move_to":
-                    return executeMoveTo(agName, action);
+                case "steap":
+                    return executeSteap(agName, action);
                 case "pickup":
                     return executePickup(agName, action);
                 case "drop_at":
                     return executeDropAt(agName, action);
                 case "assignTask":
-                    return ExecuteAssignTask(agName, action);
+                    return executeAssignTask(agName, action);
                 case "get_container_info":
                     return executeGetContainerInfo(agName, action);
-                case "get_free_shelf":
-                    return executeGetFreeShelf(agName, action);
-                case "taskcomplete":
+                case "get_location":
+                    return executeGetLocation(agName, action);
+                case "get_shelf_status":
+                    return executeGetShelfStatus(agName, action);
+                case "task_complete":
                     return executeTaskComplete(agName, action);
+                case "move_to_processing":
+                    return executeMoveToProcessing(agName, action);
                 default:
                     System.err.println("Unknown action: " + actionName);
                     return false;
@@ -156,160 +145,232 @@ public class WarehouseArtifact extends Environment {
             return false;
         }
     }
-
+ 
+    // -------------------------------------------------------------------------
+    // IMPLEMENTACIÓN DE ACCIONES
+    // -------------------------------------------------------------------------
+ 
+    /**
+     * Acción: steap(X, Y)
+     * Mueve el robot un paso a la posición indicada.
+     */
+    private boolean executeSteap(String agName, Structure action) {
+        try {
+            int error = model.steap(agName, action);
+            String destination = action.getTerm(0).toString() + "," + action.getTerm(1).toString();
+ 
+            if (error == 0) {
+                viewAct(String.format("%s moved to (%s)", agName, destination));
+                return true;
+            } else if (error == 3) {
+                addError(agName, "blocked_by_agent", "Path blocked by another agent at " + destination);
+                return true; // El agente puede replanificar
+            } else if (error == 5) {
+                addError(agName, "splash_container", "Robot stepped on a container at " + destination);
+                return false;
+            } else {
+                addError(agName, "unknown", "Unknown error code: " + error);
+                return false;
+            }
+        } finally {
+            removePerceptsByUnif(agName, Literal.parseLiteral("at(_,_,_)"));
+            updatePercepts(agName);
+        }
+    }
+ 
+    /**
+     * Acción: pickup(ContainerId)
+     * Recoge un contenedor desde la zona de clasificación.
+     */
+    private boolean executePickup(String agName, Structure action) {
+        String containerId = action.getTerm(0).toString().replace("\"", "");
+        int error = model.pickUp(agName, action);
+ 
+        if (error == 0) {
+            viewAct(String.format("%s picked up %s", agName, containerId));
+            addPercept(agName, Literal.parseLiteral("picked(\"" + containerId + "\")"));
+            return true;
+        } else if (error == 1) {
+            addError(agName, "invalid_pick", "Robot or container not found: " + containerId);
+        } else if (error == 2) {
+            addError(agName, "already_carrying", "Robot is already carrying something");
+        } else if (error == 3) {
+            addError(agName, "too_far", "Container too far away: " + containerId);
+        }
+        return false;
+    }
+ 
+    /**
+     * Acción: move_to_processing(ContainerId, DestX, DestY)
+     * Mueve un paquete de la zona de entrada a la zona de clasificación.
+     * Restaura la celda origen a ENTRANCE y marca la destino como PACKAGE.
+     */
+    private boolean executeMoveToProcessing(String agName, Structure action) {
+        String containerId = action.getTerm(0).toString().replace("\"", "");
+        int error = model.moveToProcessing(agName, action);
+ 
+        if (error == 0) {
+            viewAct(String.format("%s moved container %s to processing zone", agName, containerId));
+            return true;
+        } else if (error == 1) {
+            addError(agName, "invalid_move", "Robot or container not found: " + containerId);
+        } else if (error == 2) {
+            addError(agName, "already_picked", "Container already picked or not in entrance: " + containerId);
+        } else if (error == 3) {
+            addError(agName, "dest_occupied", "Destination cell is not a free classification cell");
+        } else if (error == 4) {
+            addError(agName, "dest_out_of_bounds", "Destination is outside classification zone");
+        } else {
+            addError(agName, "unknown", "Unexpected error moving container " + containerId);
+        }
+        return false;
+    }
+ 
+    /**
+     * Acción: drop_at(ShelfId)
+     * Deposita el contenedor que lleva el robot en una estantería adyacente.
+     */
+    private boolean executeDropAt(String agName, Structure action) {
+        String shelfId = action.getTerm(0).toString().replace("\"", "");
+        int error = model.dropContainer(agName, action);
+ 
+        if (error == 0) {
+            viewAct(String.format("%s dropped container at %s", agName, shelfId));
+            removePerceptsByUnif(agName, Literal.parseLiteral("picked(_)"));
+            return true;
+        } else if (error == 1) {
+            addError(agName, "invalid_drop", "Robot or shelf not found: " + shelfId);
+        } else if (error == 2) {
+            addError(agName, "not_carrying", "Robot is not carrying anything");
+            return true; // No es un error fatal, el agente puede continuar
+        } else if (error == 3) {
+            addError(agName, "too_far", "Shelf too far away: " + shelfId);
+        } else if (error == 4) {
+            addError(agName, "shelf_full", "Shelf " + shelfId + " cannot store container");
+        }
+        return false;
+    }
+ 
+    /**
+     * Acción: assignTask(ContainerId, ShelfId)
+     * Asigna una tarea de transporte al robot.
+     */
+    private boolean executeAssignTask(String agName, Structure action) {
+        String result = model.assignTask(agName, action);
+ 
+        switch (result) {
+            case "error":
+            case "null_robot":
+            case "null_container":
+                return false;
+            case "already_assigned":
+                return true;
+            case "busy":
+                addError(agName, "busy", "Robot is already busy or carrying");
+                return true;
+            case "no_task":
+                addPercept(agName, Literal.parseLiteral("no_task"));
+                return true;
+            case "cannot_carry":
+                addError(agName, "cannot_carry", "This robot cannot carry the assigned container");
+                return true;
+            case "null_shelf":
+                addError(agName, "no_shelf_available", "No valid shelf for container");
+                return true;
+            default:
+                viewAct(String.format("%s assigned task: %s", agName, result));
+                removePerceptsByUnif(agName, Literal.parseLiteral("no_task"));
+                addPercept(agName, Literal.parseLiteral(result));
+                return true;
+        }
+    }
+ 
+    /**
+     * Acción: get_container_info(ContainerId)
+     * Añade una percepción con el peso, dimensiones y tipo del contenedor.
+     */
+    private boolean executeGetContainerInfo(String agName, Structure action) {
+        Literal containerInfo = model.getContainerInfo(agName, action);
+        if (containerInfo != null) {
+            viewAct(String.format("%s requested info for %s: %s",
+                    agName, action.getTerm(0).toString(), containerInfo.toString()));
+            addPercept(agName, containerInfo);
+            return true;
+        } else {
+            addError(agName, "container_not_found", action.getTerm(0).toString());
+            return false;
+        }
+    }
+ 
+    /**
+     * Acción: get_location(ItemId)
+     * Añade una percepción location(ItemId, X, Y).
+     */
+    private boolean executeGetLocation(String agName, Structure action) {
+        String itemId = action.getTerm(0).toString().replace("\"", "");
+        Literal locationInfo = model.getLocation(itemId);
+        if (locationInfo != null) {
+            addPercept(agName, locationInfo);
+            viewAct(String.format("%s location of %s: %s", agName, itemId, locationInfo.toString()));
+            return true;
+        } else {
+            addError(agName, "item_not_found", "Item not found: " + itemId);
+            return false;
+        }
+    }
+ 
+    /**
+     * Acción: get_shelf_status(ShelfId)
+     * Añade una percepción shelf_info(ShelfId, MaxW, CurW, MaxV, CurV).
+     */
+    private boolean executeGetShelfStatus(String agName, Structure action) {
+        Literal shelfInfo = model.get_shelf_status(agName, action);
+        if (shelfInfo != null) {
+            addPercept(agName, shelfInfo);
+            return true;
+        }
+        addError(agName, "shelf_not_found", action.getTerm(0).toString());
+        return false;
+    }
+ 
+    /**
+     * Acción: task_complete(ContainerId, ShelfId)
+     * Marca la tarea como completada y notifica al scheduler.
+     */
     private boolean executeTaskComplete(String agName, Structure action) {
         String containerId = action.getTerm(0).toString().replace("\"", "");
         String shelfId = action.getTerm(1).toString().replace("\"", "");
         boolean correct = model.taskComplete(agName, action);
-
+ 
         if (correct) {
             removePerceptsByUnif(agName, Literal.parseLiteral("task(_,_)"));
-            addPercept("scheduler", Literal.parseLiteral("task_completed(\"" + agName + "\",\"" + containerId + "\",\"" + shelfId + "\")"));
+            addPercept("scheduler", Literal.parseLiteral(
+                    "task_completed(\"" + agName + "\",\"" + containerId + "\",\"" + shelfId + "\")"));
             viewAct(String.format("%s completed task for %s at %s", agName, containerId, shelfId));
         } else {
             addError(agName, "task_complete_failed", "Failed to complete task for " + containerId);
         }
         return correct;
     }
-
+ 
+    // -------------------------------------------------------------------------
+    // UTILIDADES
+    // -------------------------------------------------------------------------
+ 
     /**
-     * Acción: move_to(X, Y) Mueve el robot a la posición especificada
+     * Actualiza la percepción de posición de un robot concreto.
+     * Formato: at(RobotId, X, Y)
      */
-    private boolean executeMoveTo(String agName, Structure action) {
-        try {
-            int error = model.moveTo(agName, action);
-            String destination = action.getTerm(0).toString().replace("\"", "");
-            if (error == 0) {
-                viewAct(String.format("%s moved to %s", agName, destination));
-                return true;
-            } else if (error == 1) {
-                addError(agName, "invalid_destination", "Unknown destination: " + destination);
-                return false;
-            } else if (error == 3) {
-                addError(agName, "blocked_by_agent", "Path blocked by another agent");
-                return true; // El movimiento se intentó pero fue bloqueado, el agente puede decidir esperar o replanificar
-            }
-            if (error == 5) {
-                addError(agName, "splashContainer", "splash container error: ");
-            } else {
-                addError(agName, "uknown", "uknown error code: " + error);
-            }
-            return false;
-        } finally {
-
-            removePerceptsByUnif(agName, Literal.parseLiteral("at(_,_)"));
-            updatePercepts();
-        }
-
-    }
-
-    /**
-     * Acción: pickup(ContainerId) Recoge un contenedor
-     */
-    private boolean executePickup(String agName, Structure action) {
-        int error = model.pickUp(agName, action);
-        String containerId = action.getTerm(0).toString().replace("\"", "");
-        if (error == 0) {
-            viewAct(String.format("%s picked up %s", agName, containerId));
-            addPercept(agName, Literal.parseLiteral("picked(\"" + containerId + "\")"));
-            return true;
-        } else if (error == 1) {
-            addError(agName, "invalid_pick", "Robot or container not found");
-        } else if (error == 2) {
-            addError(agName, "already_carrying", "Robot is already carrying something");
-        } else if (error == 3) {
-            addError(agName, "too_far", "Container too far away");
-        }
-        return false;
-    }
-
-    /**
-     * Acción: drop_at(ShelfId) Deposita el contenedor en una estantería
-     */
-    private boolean executeDropAt(String agName, Structure action) {
-        String shelfId = action.getTerm(0).toString().replace("\"", "");
-        int error = model.dropContainer(agName, action);
+    private void updatePercepts(String agName) {
         Robot robot = model.getRobots().get(agName);
-        if (error == 0) {
-            viewAct(String.format("%s dropped container at %s", agName, shelfId));
-            removePerceptsByUnif(agName, Literal.parseLiteral("picked(_)"));
-            return true;
-        } else if (error == 1) {
-            addError(agName, "invalid_drop", "Robot or shelf not found");
-        } else if (error == 2) {
-            addError(agName, "not_carrying", "Robot is not carrying anything");
-            return true;
-        } else if (error == 3) {
-            addError(agName, "too_far", "Shelf too far away");
-        } else if (error == 4) {
-            addError(agName, "shelf_full", "Shelf " + shelfId + " cannot store container");
-        }
-        return false;
+        if (robot == null) return;
+ 
+        removePerceptsByUnif(agName, Literal.parseLiteral("at(_,_,_)"));
+        addPercept(agName, Literal.parseLiteral(
+                "at(\"" + robot.getId() + "\"," + robot.getX() + "," + robot.getY() + ")"
+        ));
     }
-
-    /**
-     * Acción: request_task() Solicita una nueva tarea del scheduler
-     */
-    private boolean ExecuteAssignTask(String agName, Structure action) {
-        String result = model.assignTask(agName, action);
-        if ("error".equals(result)) {
-            return false;
-        } else if (result.equals("null_robot")) {
-            return false;
-        } else if (result.equals("null_container")) {
-            return false;
-        } else if (result.equals("already_assigned")) {
-            return true;
-        } else if ("no_task".equals(result)) {
-            addPercept(agName, Literal.parseLiteral("no_task"));
-            return true;
-        } else if ("cannot_carry".equals(result)) {
-            addError(agName, "cannot_carry", "this robot cannot carry the assigned container");
-            return true;
-        } else if ("no_shelf_available".equals(result)) {
-            addError(agName, "no_shelf_available", "No shelf available for container");
-            return true;
-        } else {
-            viewAct(String.format("%s assigned task: %s", agName, result.toString()));
-            removePerceptsByUnif(agName, Literal.parseLiteral("no_task"));
-            addPercept(agName, Literal.parseLiteral(result));
-            return true;
-        }
-    }
-
-    /**
-     * Acción: get_container_info(ContainerId) Obtiene información sobre un
-     * contenedor
-     */
-    private boolean executeGetContainerInfo(String agName, Structure action) {
-        Literal containerInfo = model.getContainerInfo(agName, action); // Implementar si es necesario
-        if (containerInfo != null) {
-            viewAct(String.format("%s requested info for %s: %s", agName, action.getTerm(0).toString(), containerInfo.toString()));
-            addPercept(agName, containerInfo);
-            return true;
-        } else {
-            viewAct(String.format("%s requested info for %s: not found", agName, action.getTerm(0).toString()));
-            addError(agName, "container_not_found", action.getTerm(0).toString());
-            return false;
-        }
-    }
-
-    /**
-     * Acción: get_free_shelf(ContainerId) Busca una estantería libre para un
-     * contenedor
-     */
-    private boolean executeGetFreeShelf(String agName, Structure action) {
-        Literal freeShelf = model.getFreeShelf(agName, action); // Implementar si es necesario
-        if (freeShelf != null) {
-            addPercept(agName, freeShelf);
-            return true;
-        }
-        return false;
-    }
-
-    /**
-     * Agrega un error a las percepciones
-     */
+ 
     private void addError(String agName, String errorType, String data) {
         removePerceptsByUnif(agName, Literal.parseLiteral("error(_,_)"));
         addPercept(agName, Literal.parseLiteral(
@@ -319,53 +380,12 @@ public class WarehouseArtifact extends Environment {
         totalErrors++;
         addPercept("supervisor", Literal.parseLiteral("total_errors(" + errorType + "," + totalErrors + ")"));
     }
-
-    //Espaguetis a la carbornara 
-    void updatePercepts() {
-        // Posiciones iniciales de los robots
-        Map<String, String> initialPositions = Map.of(
-                "lightInit", "lightInit",
-                "mediumInit", "mediumInit",
-                "heavyInit", "heavyInit"
-        );
-
-        // Estanterías
-        List<String> shelves = List.of(
-                "shelf_1", "shelf_2", "shelf_3", "shelf_4",
-                "shelf_5", "shelf_6", "shelf_7", "shelf_8", "shelf_9"
-        );
-        // Actualizar percepciones de todos los robots
-        for (Map.Entry<String, Robot> entry : model.getRobots().entrySet()) {
-            String agName = entry.getKey();
-            Robot robot = entry.getValue();
-            Location loc = new Location(robot.getX(), robot.getY());
-
-            // Verificar posiciones iniciales
-            for (Map.Entry<String, String> init : initialPositions.entrySet()) {
-                if (model.getLocation(init.getKey()).distance(loc) == 0) {
-                    addPercept(agName, Literal.parseLiteral("at(" + robot.getId() + "," + init.getValue() + ")"));
-                }
-            }
-            for (Container container : model.getContainers().values()) {
-                if (model.getLocation(container.getId()).distance(loc) == 1) {
-                    addPercept(agName, Literal.parseLiteral("at(" + robot.getId() + "," + container.getId() + ")"));
-                }
-            }
-            // Verificar estanterías adyacentes
-            for (String shelf : shelves) {
-                if (model.isAdjacentToShelf(agName, shelf)) {
-                    addPercept(agName, Literal.parseLiteral("at(" + robot.getId() + "," + shelf + ")"));
-                }
-            }
-        }
-
-    }
-
+ 
     private void viewAct(String message) {
         if (view != null) {
             view.logMessage(message);
             view.update();
         }
     }
-
 }
+ 
