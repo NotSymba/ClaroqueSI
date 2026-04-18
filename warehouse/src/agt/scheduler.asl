@@ -231,10 +231,13 @@ urgent_shelf(shelf_8).
     !tier_list(W, Raw);
     !filter_excluded(Raw, Filtered).
 
-/* Preferencia por tier de peso (solo estanterías NO urgentes) */
+/* Preferencia por tier de peso (solo estanterías NO urgentes).
+ * Se PRIORIZA el tier propio pero se incluyen el resto como fallback:
+ * si las preferidas no aceptan (capacidad/peso/exclusión), se intenta en
+ * las siguientes. El supervisor filtra por capacidad real. */
 +!tier_list(W, [shelf_2, shelf_3, shelf_4, shelf_6, shelf_7, shelf_9]) : W <= 10.
-+!tier_list(W, [shelf_6, shelf_7, shelf_9]) : W <= 30.
-+!tier_list(_, [shelf_9]).
++!tier_list(W, [shelf_6, shelf_7, shelf_9, shelf_2, shelf_3, shelf_4]) : W <= 30.
++!tier_list(_, [shelf_9, shelf_6, shelf_7, shelf_2, shelf_3, shelf_4]).
 
 +!filter_excluded([], []).
 +!filter_excluded([H | T], Out) : shelf_excluded(H) <-
