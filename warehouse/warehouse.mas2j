@@ -11,10 +11,16 @@ MAS warehouse {
     environment: warehouse.WarehouseArtifact
 
     agents:
-        // Agentes reponedores - uno de cada tipo
-       robot_light [beliefs="robot_type(light)", beliefs="max_weight(10)", beliefs="max_size(1,1)", beliefs="state(idle)"];
-        robot_medium [beliefs="robot_type(medium)", beliefs="max_weight(30)", beliefs="max_size(1,2)", beliefs="state(idle)"];
-        robot_heavy [beliefs="robot_type(heavy)", beliefs="max_weight(100)", beliefs="max_size(2,3)", beliefs="state(idle)"];
+        // Agentes robot - uno de cada tipo
+        robot_light [beliefs= "at(robot_light, 3 , 3)", beliefs="speed(3)",
+                     beliefs="robot_type(light)", beliefs="max_weight(10)",
+                     beliefs="max_size(1,1)", beliefs="state(idle)"];
+        robot_medium [beliefs= "at(robot_medium, 4 , 3)",beliefs="speed(2)",
+                      beliefs="robot_type(medium)", beliefs="max_weight(30)",
+                      beliefs="max_size(1,2)", beliefs="state(idle)"];
+        robot_heavy [beliefs= "at(robot_heavy, 5 , 3)", beliefs="speed(1)",
+                     beliefs="robot_type(heavy)", beliefs="max_weight(100)",
+                     beliefs="max_size(2,3)", beliefs="state(idle)"];
         
         // Agente planificador/scheduler
         scheduler;

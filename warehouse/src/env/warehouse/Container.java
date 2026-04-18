@@ -38,7 +38,7 @@ public class Container {
     
     // Setters
     public void setPicked(boolean picked) { this.picked = picked; }
-    public void setAssignedShelf(String shelfId) { this.assignedShelf = shelfId; }
+    public void setAssignedShelf(String shelfId) { this.assignedShelf = shelfId; x=-1; y=-1;}
     public void setPosition(int x, int y) { this.x = x; this.y = y; }
     
     @Override

@@ -1,5 +1,6 @@
 package warehouse;
 
+import com.sun.source.doctree.LiteralTree;
 import jason.asSyntax.*;
 import jason.environment.grid.GridWorldModel;
 
@@ -28,8 +29,8 @@ public class WarehouseModel extends GridWorldModel {
 
     // Todas las posiciones válidas de entrada (sin duplicados)
     private final List<Location> allEntranceLocations = Arrays.asList(
-            new Location(0, 0), new Location(1, 0), new Location(2, 0),
-            new Location(0, 1), new Location(1, 1), new Location(2, 1)
+            new Location(5, 0), new Location(6, 0), new Location(7, 0),
+            new Location(5, 1), new Location(6, 1), new Location(7, 1)
     );
     // Pool de slots de entrada libres (sin paquete encima)
     private final ConcurrentLinkedDeque<Location> freeEntranceSlots = new ConcurrentLinkedDeque<>();
@@ -67,7 +68,6 @@ public class WarehouseModel extends GridWorldModel {
     // -------------------------------------------------------------------------
     // INICIALIZACIÓN
     // -------------------------------------------------------------------------
-
     private void initializeGrid() {
         for (int x = 0; x < GRID_WIDTH; x++) {
             for (int y = 0; y < GRID_HEIGHT; y++) {
@@ -77,19 +77,19 @@ public class WarehouseModel extends GridWorldModel {
 
         for (int x = 0; x < 3; x++) {
             for (int y = 0; y < 2; y++) {
-                grid[x][y] = CellType.ENTRANCE;
+                grid[x][y] = CellType.EXIT;
             }
         }
 
-        for (int x = 3; x < 7; x++) {
+        for (int x = 3; x < 5; x++) {
             for (int y = 0; y < 2; y++) {
                 grid[x][y] = CellType.CLASSIFICATION;
             }
         }
 
-        for (int x = 0; x < 3; x++) {
-            for (int y = GRID_HEIGHT - 2; y < GRID_HEIGHT; y++) {
-                grid[x][y] = CellType.EXIT;
+        for (int x = 5; x < 8; x++) {
+            for (int y = 0; y < 2; y++) {
+                grid[x][y] = CellType.ENTRANCE;
             }
         }
     }
@@ -106,6 +106,10 @@ public class WarehouseModel extends GridWorldModel {
         Robot heavy = new Robot("robot_heavy", "heavy", 100, 2, 3, 1);
         heavy.setPosition(5, 3);
         robots.put("robot_heavy", heavy);
+        //segundo robot Heavy
+        Robot heavy2 = new Robot("robot_heavy2", "other_heavy", 100, 2, 3, 1);
+        heavy2.setPosition(6, 3);
+        robots.put("robot_heavy2", heavy2);
     }
 
     private void initializeShelves() {
@@ -143,10 +147,9 @@ public class WarehouseModel extends GridWorldModel {
     // -------------------------------------------------------------------------
     // GENERACIÓN DE CONTENEDORES
     // -------------------------------------------------------------------------
-
     /**
-     * Genera un nuevo contenedor en un slot de entrada libre.
-     * Devuelve null si no hay slots disponibles.
+     * Genera un nuevo contenedor en un slot de entrada libre. Devuelve null si
+     * no hay slots disponibles.
      */
     public Container newContainer() {
         if (freeEntranceSlots.isEmpty()) {
@@ -219,21 +222,17 @@ public class WarehouseModel extends GridWorldModel {
     // -------------------------------------------------------------------------
     // ACCIONES DE AGENTES
     // -------------------------------------------------------------------------
-
     /**
-     * Mueve un paquete de la zona de entrada a una posición de la zona de clasificación.
-     * action: moveToProcessing(containerId, destX, destY)
+     * Mueve un paquete de la zona de entrada a una posición de la zona de
+     * clasificación. action: moveToProcessing(containerId, destX, destY)
      *
-     * La celda origen vuelve a CellType.ENTRANCE y su slot se devuelve al pool libre.
-     * La celda destino pasa a CellType.PACKAGE.
+     * La celda origen vuelve a CellType.ENTRANCE y su slot se devuelve al pool
+     * libre. La celda destino pasa a CellType.PACKAGE.
      *
-     * Códigos de retorno:
-     *   0 = ok
-     *   1 = robot o contenedor no encontrado
-     *   2 = el contenedor ya fue recogido o no está en zona de entrada
-     *   3 = destino ocupado (no es CLASSIFICATION libre)
-     *   4 = destino fuera de la zona de clasificación
-     *   5 = error inesperado
+     * Códigos de retorno: 0 = ok 1 = robot o contenedor no encontrado 2 = el
+     * contenedor ya fue recogido o no está en zona de entrada 3 = destino
+     * ocupado (no es CLASSIFICATION libre) 4 = destino fuera de la zona de
+     * clasificación 5 = error inesperado
      */
     public int moveToProcessing(String agName, Structure action) {
         try {
@@ -295,17 +294,13 @@ public class WarehouseModel extends GridWorldModel {
     }
 
     /**
-     * El robot recoge un contenedor desde la zona de clasificación/procesamiento.
-     * action: pickUp(containerId)
+     * El robot recoge un contenedor desde la zona de
+     * clasificación/procesamiento. action: pickUp(containerId)
      *
      * La celda del paquete vuelve a CellType.CLASSIFICATION.
      *
-     * Códigos de retorno:
-     *   0 = ok
-     *   1 = robot o contenedor no encontrado
-     *   2 = robot ya lleva algo
-     *   3 = robot demasiado lejos
-     *   4 = error inesperado
+     * Códigos de retorno: 0 = ok 1 = robot o contenedor no encontrado 2 = robot
+     * ya lleva algo 3 = robot demasiado lejos 4 = error inesperado
      */
     public int pickUp(String agName, Structure action) {
         try {
@@ -329,8 +324,19 @@ public class WarehouseModel extends GridWorldModel {
                 return 3;
             }
 
-            // Restaurar la celda a CLASSIFICATION
-            grid[container.getX()][container.getY()] = CellType.CLASSIFICATION;
+            int cx = container.getX();
+            int cy = container.getY();
+
+            // Restaurar la celda según su zona original
+            boolean esEntrada = allEntranceLocations.stream()
+                    .anyMatch(loc -> loc.getX() == cx && loc.getY() == cy);
+
+            if (esEntrada) {
+                grid[cx][cy] = CellType.ENTRANCE;
+                freeEntranceSlots.offer(new Location(cx, cy));
+            } else {
+                grid[cx][cy] = CellType.CLASSIFICATION;
+            }
 
             robot.pickup(container);
             container.setPicked(true);
@@ -343,6 +349,68 @@ public class WarehouseModel extends GridWorldModel {
             totalErrors++;
             e.printStackTrace();
             return 4;
+        }
+    }
+
+    /**
+     * Mueve un paquete de su celda actual a una celda libre de clasificación.
+     * No razona sobre accesibilidad: el caller (scheduler) decide destX/destY.
+     *
+     * Códigos: 0 = ok, 1 = contenedor no encontrado, 2 = contenedor no válido
+     * (recogido o no está en PACKAGE), 3 = destino no es CLASSIFICATION libre,
+     * 4 = destino fuera de zona de clasificación, 5 = error inesperado.
+     */
+    public int relocateContainer(String agName, Structure action) {
+        try {
+            String containerId = action.getTerm(0).toString().replace("\"", "");
+            int destX = Integer.parseInt(action.getTerm(1).toString().replace("\"", ""));
+            int destY = Integer.parseInt(action.getTerm(2).toString().replace("\"", ""));
+
+            Container container = containers.get(containerId);
+            if (container == null) {
+                totalErrors++;
+                return 1;
+            }
+            if (container.isPicked()) {
+                totalErrors++;
+                return 2;
+            }
+
+            int srcX = container.getX();
+            int srcY = container.getY();
+            if (grid[srcX][srcY] != CellType.PACKAGE) {
+                totalErrors++;
+                return 2;
+            }
+
+            if (destX < 3 || destX >= 5 || destY < 0 || destY >= 2) {
+                totalErrors++;
+                return 4;
+            }
+            if (grid[destX][destY] != CellType.CLASSIFICATION) {
+                totalErrors++;
+                return 3;
+            }
+
+            boolean srcEsEntrada = allEntranceLocations.stream()
+                    .anyMatch(loc -> loc.getX() == srcX && loc.getY() == srcY);
+            if (srcEsEntrada) {
+                grid[srcX][srcY] = CellType.ENTRANCE;
+                freeEntranceSlots.offer(new Location(srcX, srcY));
+            } else {
+                grid[srcX][srcY] = CellType.CLASSIFICATION;
+            }
+
+            grid[destX][destY] = CellType.PACKAGE;
+            container.setPosition(destX, destY);
+
+            System.out.println("Container " + containerId + " relocated from ("
+                    + srcX + "," + srcY + ") to (" + destX + "," + destY + ")");
+            return 0;
+        } catch (Exception e) {
+            e.printStackTrace();
+            totalErrors++;
+            return 5;
         }
     }
 
@@ -433,7 +501,6 @@ public class WarehouseModel extends GridWorldModel {
     // -------------------------------------------------------------------------
     // CONSULTAS / PERCEPTOS
     // -------------------------------------------------------------------------
-
     public Literal get_shelf_status(String agName, Structure action) {
         try {
             String shelfId = action.getTerm(0).toString().replace("\"", "");
@@ -458,6 +525,18 @@ public class WarehouseModel extends GridWorldModel {
             return null;
         }
     }
+
+    public Literal getFinalShelf(String itemId) {
+         Shelf s = shelves.get(itemId);
+        if (s != null) {
+            return Literal.parseLiteral(
+                    "locationF(" + itemId + "," + (s.getX() + s.getWidth()) + "," + (s.getY() + s.getHeight())+ ")"
+            );
+        }
+        return null;
+    }
+
+    
 
     public Literal getLocation(String itemId) {
         if (itemId.startsWith("shelf_")) {
@@ -571,7 +650,6 @@ public class WarehouseModel extends GridWorldModel {
     // -------------------------------------------------------------------------
     // UTILIDADES
     // -------------------------------------------------------------------------
-
     public String getStatistics() {
         long elapsedTime = (System.currentTimeMillis() - startTime) / 1000;
         return String.format(
@@ -608,6 +686,68 @@ public class WarehouseModel extends GridWorldModel {
         return totalErrors;
     }
 
+    /**
+     * Devuelve las casillas accesibles (no-SHELF) adyacentes a un shelf.
+     * Son las celdas que bordean el rectángulo del shelf y que están dentro
+     * del grid y NO son SHELF.
+     */
+    public Literal getShelfAdjacentCells(String shelfId) {
+        Shelf shelf = shelves.get(shelfId);
+        if (shelf == null) return null;
+
+        int minX = shelf.getX();
+        int maxX = shelf.getX() + shelf.getWidth() - 1;
+        int minY = shelf.getY();
+        int maxY = shelf.getY() + shelf.getHeight() - 1;
+
+        StringBuilder sb = new StringBuilder("shelf_adjacent(" + shelfId + ",[");
+        boolean first = true;
+
+        // Borde superior (y = minY - 1)
+        if (minY - 1 >= 0) {
+            for (int x = minX; x <= maxX; x++) {
+                if (grid[x][minY - 1] != CellType.SHELF) {
+                    if (!first) sb.append(",");
+                    sb.append("pos(").append(x).append(",").append(minY - 1).append(")");
+                    first = false;
+                }
+            }
+        }
+        // Borde inferior (y = maxY + 1)
+        if (maxY + 1 < GRID_HEIGHT) {
+            for (int x = minX; x <= maxX; x++) {
+                if (grid[x][maxY + 1] != CellType.SHELF) {
+                    if (!first) sb.append(",");
+                    sb.append("pos(").append(x).append(",").append(maxY + 1).append(")");
+                    first = false;
+                }
+            }
+        }
+        // Borde izquierdo (x = minX - 1)
+        if (minX - 1 >= 0) {
+            for (int y = minY; y <= maxY; y++) {
+                if (grid[minX - 1][y] != CellType.SHELF) {
+                    if (!first) sb.append(",");
+                    sb.append("pos(").append(minX - 1).append(",").append(y).append(")");
+                    first = false;
+                }
+            }
+        }
+        // Borde derecho (x = maxX + 1)
+        if (maxX + 1 < GRID_WIDTH) {
+            for (int y = minY; y <= maxY; y++) {
+                if (grid[maxX + 1][y] != CellType.SHELF) {
+                    if (!first) sb.append(",");
+                    sb.append("pos(").append(maxX + 1).append(",").append(y).append(")");
+                    first = false;
+                }
+            }
+        }
+
+        sb.append("])");
+        return Literal.parseLiteral(sb.toString());
+    }
+
     public boolean isAdjacentToShelf(String robotID, String shelfID) {
         Robot robot = robots.get(robotID);
         Shelf shelf = shelves.get(shelfID);
@@ -619,10 +759,18 @@ public class WarehouseModel extends GridWorldModel {
         int minY = shelf.getY();
         int maxY = shelf.getY() + shelf.getHeight() - 1;
 
-        if (rx == minX - 1 && ry >= minY && ry <= maxY) return true;
-        if (rx == maxX + 1 && ry >= minY && ry <= maxY) return true;
-        if (ry == minY - 1 && rx >= minX && rx <= maxX) return true;
-        if (ry == maxY + 1 && rx >= minX && rx <= maxX) return true;
+        if (rx == minX - 1 && ry >= minY && ry <= maxY) {
+            return true;
+        }
+        if (rx == maxX + 1 && ry >= minY && ry <= maxY) {
+            return true;
+        }
+        if (ry == minY - 1 && rx >= minX && rx <= maxX) {
+            return true;
+        }
+        if (ry == maxY + 1 && rx >= minX && rx <= maxX) {
+            return true;
+        }
 
         return false;
     }

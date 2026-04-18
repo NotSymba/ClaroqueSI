@@ -358,6 +358,9 @@ public class WarehouseView extends JFrame {
                     case "heavy":
                         robotColor = new Color(255, 100, 255);
                         break;
+                    case "other_heavy":
+                        robotColor = new Color(255, 165, 0);
+                        break;
                     default:
                         robotColor = Color.GRAY;
                 }
