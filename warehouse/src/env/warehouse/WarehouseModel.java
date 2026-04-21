@@ -106,8 +106,9 @@ public class WarehouseModel extends GridWorldModel {
         Robot heavy = new Robot("robot_heavy", "heavy", 100, 2, 3, 1);
         heavy.setPosition(5, 3);
         robots.put("robot_heavy", heavy);
-        //segundo robot Heavy
-        Robot heavy2 = new Robot("robot_heavy2", "other_heavy", 100, 2, 3, 1);
+        // Segundo robot Heavy — idéntico en capacidades a robot_heavy.
+        // Se coordina con robot_heavy vía mensajes (ver robot_heavy.asl).
+        Robot heavy2 = new Robot("robot_heavy2", "heavy", 100, 2, 3, 1);
         heavy2.setPosition(6, 3);
         robots.put("robot_heavy2", heavy2);
     }
@@ -269,7 +270,7 @@ public class WarehouseModel extends GridWorldModel {
             }
 
             // Verificar que el destino está dentro de los límites de la zona de clasificación
-            if (destX < 3 || destX >= 7 || destY < 0 || destY >= 2) {
+            if (destX < 3 || destX >= 5 || destY < 0 || destY >= 2) {
                 totalErrors++;
                 return 4;
             }
@@ -635,7 +636,7 @@ public class WarehouseModel extends GridWorldModel {
             robot.setCurrentTask(container.getId());
 
             System.out.println("Task assigned to " + agName + ": " + container.getId() + " -> " + shelf.getId());
-            pendingContainers.poll();
+            pendingContainers.remove(container);
 
             return Literal.parseLiteral(
                     "task(" + container.getId() + "," + shelf.getId() + ")").toString();
@@ -782,10 +783,6 @@ public class WarehouseModel extends GridWorldModel {
             }
         }
         return false;
-    }
-
-    private boolean hayPaqueteEn(int x, int y) {
-        return grid[x][y] == CellType.PACKAGE;
     }
 
     /**

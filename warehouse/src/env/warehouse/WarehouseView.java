@@ -20,6 +20,9 @@ public class WarehouseView extends JFrame {
     private JTextArea robotsArea;
     private JTextArea shelvesArea;
     private JTextArea consoleArea;
+    private JScrollPane statsScroll;
+    private JScrollPane robotsScroll;
+    private JScrollPane shelvesScroll;
 
     public WarehouseView(WarehouseModel warehouse, int gridWidth, int gridHeight) {
         this.warehouse = warehouse;
@@ -58,7 +61,9 @@ public class WarehouseView extends JFrame {
         statsArea.setBackground(Color.WHITE);
         statsArea.setForeground(Color.BLACK);
         statsArea.setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
-        JScrollPane statsScroll = new JScrollPane(statsArea);
+        ((javax.swing.text.DefaultCaret) statsArea.getCaret())
+                .setUpdatePolicy(javax.swing.text.DefaultCaret.NEVER_UPDATE);
+        statsScroll = new JScrollPane(statsArea);
         statsScroll.setAlignmentX(Component.LEFT_ALIGNMENT);
         statsScroll.setPreferredSize(new Dimension(430, 110));
 
@@ -72,7 +77,9 @@ public class WarehouseView extends JFrame {
         robotsArea.setBackground(Color.WHITE);
         robotsArea.setForeground(Color.BLACK);
         robotsArea.setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
-        JScrollPane robotsScroll = new JScrollPane(robotsArea);
+        ((javax.swing.text.DefaultCaret) robotsArea.getCaret())
+                .setUpdatePolicy(javax.swing.text.DefaultCaret.NEVER_UPDATE);
+        robotsScroll = new JScrollPane(robotsArea);
         robotsScroll.setAlignmentX(Component.LEFT_ALIGNMENT);
         robotsScroll.setPreferredSize(new Dimension(430, 180));
 
@@ -86,7 +93,9 @@ public class WarehouseView extends JFrame {
         shelvesArea.setBackground(Color.WHITE);
         shelvesArea.setForeground(Color.BLACK);
         shelvesArea.setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
-        JScrollPane shelvesScroll = new JScrollPane(shelvesArea);
+        ((javax.swing.text.DefaultCaret) shelvesArea.getCaret())
+                .setUpdatePolicy(javax.swing.text.DefaultCaret.NEVER_UPDATE);
+        shelvesScroll = new JScrollPane(shelvesArea);
         shelvesScroll.setAlignmentX(Component.LEFT_ALIGNMENT);
         shelvesScroll.setPreferredSize(new Dimension(430, 220));
 
@@ -178,6 +187,10 @@ public class WarehouseView extends JFrame {
     // -------------------------------------------------------------------------
 
     private void updateInfo() {
+        Point statsPos = statsScroll.getViewport().getViewPosition();
+        Point robotsPos = robotsScroll.getViewport().getViewPosition();
+        Point shelvesPos = shelvesScroll.getViewport().getViewPosition();
+
         statsArea.setText(warehouse.getStatistics());
 
         StringBuilder robotsText = new StringBuilder();
@@ -208,6 +221,12 @@ public class WarehouseView extends JFrame {
             shelvesText.append("\n");
         }
         shelvesArea.setText(shelvesText.toString());
+
+        SwingUtilities.invokeLater(() -> {
+            statsScroll.getViewport().setViewPosition(statsPos);
+            robotsScroll.getViewport().setViewPosition(robotsPos);
+            shelvesScroll.getViewport().setViewPosition(shelvesPos);
+        });
     }
 
     // -------------------------------------------------------------------------

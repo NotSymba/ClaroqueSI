@@ -1,40 +1,56 @@
 { include("mov.asl") }
-idlezone(3,3).
-max_weight(10).
-max_size(1, 1).
+idlezone(6,3).
+max_weight(100).
+max_size(2, 3).
+min_weight(30).
+min_size(1, 2).
 
 state(idle).
-timePerMove(100).
-priority(1).  // Más alta: el más rápido tiene preferencia de paso
+timePerMove(500).
+priority(3).
 
 container_queue([]).
 
+// Misma capacidad que robot_heavy. can_i_manage sigue definido aunque
+// la decisión la centraliza robot_heavy (router) — lo mantenemos por si
+// hiciera falta una comprobación local (p. ej. un assign_here erróneo).
 can_i_manage(W, H, Weight) :-
     max_weight(MaxWeight) &
     max_size(MaxW, MaxH) &
+    min_weight(MinWeight) &
+    min_size(MinW, MinH) &
     Weight <= MaxWeight &
     W <= MaxW &
-    H <= MaxH.
+    H <= MaxH &
+    (Weight > MinWeight | W > MinW | H > MinH).
 
 !start.
 
 +!start <-
-    .print("Robot light online. Esperando contenedores...");
+    .print("Robot heavy2 online. A la espera de asignaciones de robot_heavy...");
     see.
 
 // ─────────────────────────────────────────────────────────────
 //  NUEVO CONTENEDOR
-//  container_info lo envía el scheduler vía .send(tell). Así se
-//  entrega una única vez por contenedor y podemos abolirlo tras
-//  procesarlo sin depender de que el entorno lo haga.
+//  Este robot no decide por sí mismo: robot_heavy es el enrutador.
+//  Si el scheduler nos enviase por error un container_info, lo
+//  descartamos para no encolar dos veces.
 // ─────────────────────────────────────────────────────────────
-+container_info(CId, W, H, Weight, Type) : can_i_manage(W, H, Weight) <-
-    !enqueue(CId, W, H, Weight, Type);
++container_info(CId, _, _, _, _) <-
     .abolish(container_info(CId, _, _, _, _)).
 
-+container_info(CId, W, H, Weight, Type) <-
-    .print("Contenedor ", CId, " fuera de mi capacidad, ignorado");
-    .abolish(container_info(CId, _, _, _, _)).
+// robot_heavy nos asigna explícitamente un contenedor
++assign_here(CId, W, H, Weight, Type) <-
+    .print("Recibida asignación de ", CId, " desde robot_heavy");
+    !enqueue(CId, W, H, Weight, Type);
+    .abolish(assign_here(CId, _, _, _, _)).
+
+// robot_heavy nos consulta estado para decidir el reparto
++!report_status_to(Requester) :
+    container_queue(Q) & state(S) <-
+    .length(Q, L);
+    .print("report_status_to ", Requester, " (cola=", L, ", estado=", S, ")");
+    .send(Requester, tell, heavy_peer_status(L, S)).
 
 // ─────────────────────────────────────────────────────────────
 //  COLA DE CONTENEDORES
@@ -74,8 +90,6 @@ can_i_manage(W, H, Weight) :-
 
 // ─────────────────────────────────────────────────────────────
 //  GESTIÓN DE UN CONTENEDOR
-//  La estantería la decide el scheduler (consultando al supervisor por
-//  la capacidad disponible). El robot solo pregunta y espera respuesta.
 // ─────────────────────────────────────────────────────────────
 +!handle_container(CId, Weight, W, H, Type) <-
     !goto_container(CId);
@@ -113,8 +127,6 @@ can_i_manage(W, H, Weight) :-
 
 // ─────────────────────────────────────────────────────────────
 //  DEPOSITAR
-//  Si drop_at falla, avisamos al scheduler (que excluirá la estantería)
-//  y pedimos otra.
 // ─────────────────────────────────────────────────────────────
 +!try_drop(CId, Weight, W, H, Type, Shelf) <-
     drop_at(Shelf);
@@ -128,7 +140,7 @@ can_i_manage(W, H, Weight) :-
     !try_drop(CId, Weight, W, H, Type, AltShelf).
 
 // ─────────────────────────────────────────────────────────────
-//  FINALIZAR TAREA → notificar al scheduler vía task_complete
+//  FINALIZAR TAREA
 // ─────────────────────────────────────────────────────────────
 +!finish_task(CId, Shelf) <-
     task_complete(CId, Shelf);
@@ -138,7 +150,7 @@ can_i_manage(W, H, Weight) :-
     !process_next.
 
 // ─────────────────────────────────────────────────────────────
-//  IR A IDLE ZONE cuando no hay trabajo
+//  IR A IDLE ZONE
 // ─────────────────────────────────────────────────────────────
 +!go_idle : idlezone(IX, IY) <-
     -+state(going_idle);

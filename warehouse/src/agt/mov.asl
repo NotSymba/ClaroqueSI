@@ -6,6 +6,10 @@ prev_pos(-1, -1).
 // Contador de bloqueos consecutivos para activar escape perpendicular
 block_streak(0).
 
+// Mejor distancia Manhattan al destino vista en el viaje actual.
+// Cuando mejora, borramos visited/2 para permitir caminos nuevos.
+best_dist(9999).
+
 sign(X, 1) :- X > 0.
 sign(X, -1) :- X < 0.
 sign(X, 0).
@@ -18,7 +22,18 @@ sign(X, 0).
     .abolish(visited(_, _));
     .abolish(last_move(_));
     -+prev_pos(-1, -1);
-    -+block_streak(0).
+    -+block_streak(0);
+    -+best_dist(9999).
+
+// Cuando la distancia Manhattan al destino mejora el mínimo visto,
+// borramos la tabla de visitados. Evita quedarse atrapado cuando el
+// greedy nos metió en un callejón y ya conseguimos salir.
++!maybe_reset_visited(TX, TY, CX, CY) : best_dist(Best) <-
+    D = math.abs(TX - CX) + math.abs(TY - CY);
+    if (D < Best) {
+        -+best_dist(D);
+        .abolish(visited(_, _))
+    }.
 
 // ─────────────────────────────────────────────────────────────
 // NAVEGACIÓN NORMAL
@@ -39,13 +54,21 @@ sign(X, 0).
     if (CX == TX & CY == TY) {
         .print("Llegué a destino: ", TX, ",", TY)
     } else {
+        !maybe_reset_visited(TX, TY, CX, CY);
         !next_step(CX, CY, TX, TY, NX, NY);
         !try_move(NX, NY, TX, TY)
     }.
 
 // ─────────────────────────────────────────────────────────────
 // NAVEGACIÓN ADYACENTE
+//
+// Reutiliza navigate_to (con escape_move/handle_block/visited reset)
+// para ir a una de las 4 celdas adyacentes al objetivo. Si la primera
+// candidata no es alcanzable (shelf, fuera del grid, bloqueada de forma
+// persistente), prueba la siguiente en orden de cercanía.
 // ─────────────────────────────────────────────────────────────
+
+adjacent_candidates([]).
 
 +!navigate_adjacent(TX, TY) :
     .my_name(Me) &
@@ -56,13 +79,68 @@ sign(X, 0).
 <-
     .print("Estoy en posición adyacente a: ", TX, ",", TY).
 
-+!navigate_adjacent(TX, TY) : true
-<-
++!navigate_adjacent(TX, TY) : true <-
     .my_name(Me);
     see;
     ?at(Me, CX, CY);
-    !next_adjacent_step(CX, CY, TX, TY, NX, NY);
-    !try_adjacent_move(NX, NY, TX, TY).
+    Raw = [pos(TX, TY-1), pos(TX, TY+1), pos(TX-1, TY), pos(TX+1, TY)];
+    !filter_in_bounds(Raw, Bounded);
+    !sort_by_distance(Bounded, CX, CY, Sorted);
+    -+adjacent_candidates(Sorted);
+    !try_adjacent_candidates(TX, TY).
+
+// ── Filtrar celdas fuera del grid 20x15 ──────────────────────
++!filter_in_bounds([], []).
++!filter_in_bounds([pos(X,Y)|Rest], Out) :
+    X >= 0 & X < 20 & Y >= 0 & Y < 15
+<-
+    !filter_in_bounds(Rest, RestOut);
+    Out = [pos(X,Y) | RestOut].
++!filter_in_bounds([_|Rest], Out) <-
+    !filter_in_bounds(Rest, Out).
+
+// ── Probar candidatos en orden ───────────────────────────────
+// Si la celda está ocupada por un robot ahora mismo, saltarla
+// (intentaremos otra y, si todas fallan, volveremos a empezar).
++!try_adjacent_candidates(TX, TY) :
+    adjacent_candidates([pos(AX,AY)|Rest]) & robot(_, AX, AY)
+<-
+    -+adjacent_candidates(Rest);
+    .print("Adyacente (", AX, ",", AY, ") ocupada por robot, salto");
+    !try_adjacent_candidates(TX, TY).
+
++!try_adjacent_candidates(TX, TY) :
+    adjacent_candidates([pos(AX,AY)|Rest])
+<-
+    -+adjacent_candidates(Rest);
+    .print("Voy a celda adyacente (", AX, ",", AY, ") de (", TX, ",", TY, ")");
+    !clear_nav_state;
+    !safe_nav_adjacent(AX, AY, TX, TY).
+
++!try_adjacent_candidates(_, _) :
+    adjacent_candidates([])
+<-
+    .print("Sin celdas adyacentes accesibles");
+    .fail.
+
+// Wrapper: si navigate_to(AX,AY) falla con .fail (sin movimientos
+// válidos), el handler -!safe_nav_adjacent salta a la siguiente
+// candidata en lugar de propagar el fallo al plan padre.
++!safe_nav_adjacent(AX, AY, TX, TY) <-
+    !navigate_to(AX, AY);
+    .my_name(Me);
+    see;
+    ?at(Me, CX, CY);
+    if (CX == AX & CY == AY) {
+        .print("Llegué adyacente a (", TX, ",", TY, ")")
+    } else {
+        .print("No llegué a (", AX, ",", AY, "), pruebo siguiente");
+        !try_adjacent_candidates(TX, TY)
+    }.
+
+-!safe_nav_adjacent(AX, AY, TX, TY) <-
+    .print("navigate_to(", AX, ",", AY, ") falló, probando siguiente candidata");
+    !try_adjacent_candidates(TX, TY).
 
 // ─────────────────────────────────────────────────────────────
 // DECISIÓN NORMAL
@@ -73,53 +151,16 @@ sign(X, 0).
     DX = TX - CX;
     DY = TY - CY;
 
-    // Priorizar eje Y, solo usar X cuando ya estamos alineados en Y
+    // Priorizar eje Y, solo usar X cuando ya estamos alineados en Y.
+    // La distribución de shelves (filas horizontales) hace que avanzar
+    // primero en vertical evite atravesar pasillos congestionados.
     if (DY == 0) {
         !candidate_moves_x(CX, CY, TX, TY, Moves)
     } else {
         !candidate_moves_y(CX, CY, TX, TY, Moves)
     };
 
-    !choose_valid(Moves, NX, NY).
-
-// ─────────────────────────────────────────────────────────────
-// DECISIÓN ADYACENTE
-// ─────────────────────────────────────────────────────────────
-
-+!next_adjacent_step(CX, CY, TX, TY, NX, NY)
-<-
-    DX = TX - CX;
-    DY = TY - CY;
-
-    ?sign(DX, StepX);
-    ?sign(DY, StepY);
-
-    if (StepX == 0) {
-        Moves = [
-            pos(CX, CY + StepY),
-            pos(CX - 1, CY),
-            pos(CX + 1, CY),
-            pos(CX, CY - StepY)
-        ]
-    } else {
-        if (StepY == 0) {
-            Moves = [
-                pos(CX + StepX, CY),
-                pos(CX, CY - 1),
-                pos(CX, CY + 1),
-                pos(CX - StepX, CY)
-            ]
-        } else {
-            Moves = [
-                pos(CX + StepX, CY),
-                pos(CX, CY + StepY),
-                pos(CX, CY - StepY),
-                pos(CX - StepX, CY)
-            ]
-        }
-    };
-
-    !choose_valid_adjacent(Moves, TX, TY, NX, NY).
+    !choose_valid(Moves, TX, TY, NX, NY).
 
 // ─────────────────────────────────────────────────────────────
 // MOVIMIENTOS NORMALES
@@ -170,39 +211,43 @@ sign(X, 0).
 // VALIDACIÓN NORMAL (ANTI-BUCLES REAL)
 // ─────────────────────────────────────────────────────────────
 
-// Elige el mejor movimiento en 3 pasadas con prioridad decreciente
-+!choose_valid(Moves, NX, NY) <-
-    !try_fresh(Moves, NX, NY).
+// Elige el mejor movimiento en 3 pasadas con prioridad decreciente.
+// TX,TY se usan en los fallbacks para ordenar candidatos por
+// distancia Manhattan al destino (en lugar del orden fijo N,E,O,S
+// que ignoraba la dirección y producía caminos largos).
++!choose_valid(Moves, TX, TY, NX, NY) <-
+    !try_fresh(Moves, TX, TY, NX, NY).
 
 // PASADA 1: no visitados, no prev_pos
-+!try_fresh([pos(X,Y)|_], X, Y) :
++!try_fresh([pos(X,Y)|_], _, _, X, Y) :
     not robot(_, X, Y) & not shelf(X, Y) & not container(_, X, Y) &
     not prev_pos(X, Y) & not visited(X, Y) &
     X >= 0 & X < 20 & Y >= 0 & Y < 15 <- true.
-+!try_fresh([_|Rest], NX, NY) <- !try_fresh(Rest, NX, NY).
-+!try_fresh([], NX, NY) <- !try_visited(NX, NY).
++!try_fresh([_|Rest], TX, TY, NX, NY) <- !try_fresh(Rest, TX, TY, NX, NY).
++!try_fresh([], TX, TY, NX, NY) <- !try_visited(TX, TY, NX, NY).
 
-// PASADA 2: permitir visitados, no prev_pos (usa la lista original)
-+!try_visited(NX, NY) :
+// PASADA 2: permitir visitados, no prev_pos.
+// Las 4 vecinas se ordenan por distancia Manhattan al destino.
++!try_visited(TX, TY, NX, NY) :
     .my_name(Me) & at(Me, CX, CY) <-
-    !candidate_fallback(CX, CY, NX, NY).
+    AllMoves = [pos(CX,CY+1), pos(CX+1,CY), pos(CX-1,CY), pos(CX,CY-1)];
+    !sort_by_distance(AllMoves, TX, TY, Sorted);
+    !try_visited_list(Sorted, TX, TY, NX, NY).
 
-+!candidate_fallback(CX, CY, NX, NY) <-
-    Moves = [pos(CX,CY+1), pos(CX+1,CY), pos(CX-1,CY), pos(CX,CY-1)];
-    !try_visited_list(Moves, NX, NY).
-
-+!try_visited_list([pos(X,Y)|_], X, Y) :
++!try_visited_list([pos(X,Y)|_], _, _, X, Y) :
     not robot(_, X, Y) & not shelf(X, Y) & not container(_, X, Y) &
     not prev_pos(X, Y) &
     X >= 0 & X < 20 & Y >= 0 & Y < 15 <- true.
-+!try_visited_list([_|Rest], NX, NY) <- !try_visited_list(Rest, NX, NY).
-+!try_visited_list([], NX, NY) <- !try_prev(NX, NY).
++!try_visited_list([_|Rest], TX, TY, NX, NY) <- !try_visited_list(Rest, TX, TY, NX, NY).
++!try_visited_list([], TX, TY, NX, NY) <- !try_prev(TX, TY, NX, NY).
 
-// PASADA 3: permitir incluso prev_pos (último recurso)
-+!try_prev(NX, NY) :
+// PASADA 3: permitir incluso prev_pos (último recurso),
+// también ordenado por cercanía al destino.
++!try_prev(TX, TY, NX, NY) :
     .my_name(Me) & at(Me, CX, CY) <-
-    Moves = [pos(CX,CY+1), pos(CX+1,CY), pos(CX-1,CY), pos(CX,CY-1)];
-    !try_prev_list(Moves, NX, NY).
+    AllMoves = [pos(CX,CY+1), pos(CX+1,CY), pos(CX-1,CY), pos(CX,CY-1)];
+    !sort_by_distance(AllMoves, TX, TY, Sorted);
+    !try_prev_list(Sorted, NX, NY).
 
 +!try_prev_list([pos(X,Y)|_], X, Y) :
     not robot(_, X, Y) & not shelf(X, Y) & not container(_, X, Y) &
@@ -211,30 +256,6 @@ sign(X, 0).
 +!try_prev_list([], _, _) <-
     .print("Sin movimientos válidos → fallo");
     .fail.
-
-// ─────────────────────────────────────────────────────────────
-// VALIDACIÓN ADYACENTE
-// ─────────────────────────────────────────────────────────────
-
-+!choose_valid_adjacent([pos(X,Y)|_], TX, TY, X, Y) :
-    not robot(_, X, Y) &
-    not shelf(X, Y) &
-    not container(_, X, Y) &
-    not (X == TX & Y == TY) &
-    not prev_pos(X, Y) &
-    X >= 0 & X < 20 &
-    Y >= 0 & Y < 15
-<-
-    true.
-
-+!choose_valid_adjacent([_|Rest], TX, TY, NX, NY)
-<-
-    !choose_valid_adjacent(Rest, TX, TY, NX, NY).
-
-+!choose_valid_adjacent([], _, _, NX, NY) :
-    .my_name(Me) & at(Me, NX, NY)
-<-
-    true.
 
 // ─────────────────────────────────────────────────────────────
 // EJECUCIÓN NORMAL
@@ -261,34 +282,6 @@ sign(X, 0).
     }.
 
 // ─────────────────────────────────────────────────────────────
-// EJECUCIÓN ADYACENTE
-// ─────────────────────────────────────────────────────────────
-
-+!try_adjacent_move(NX, NY, TX, TY) :
-    timePerMove(T)
-<-
-    .wait(T);
-    .my_name(Me);
-    ?at(Me, CX, CY);
-    -+prev_pos(CX, CY);
-    step(NX, NY);
-    see;
-    !verify_move(NX, NY, TX, TY).
-
-+!verify_move(NX, NY, TX, TY)
-<-
-    .my_name(Me);
-    ?at(Me, AX, AY);
-
-    if (AX == NX & AY == NY) {
-        -+last_move(pos(NX, NY));
-        !navigate_adjacent(TX, TY)
-    } else {
-        .print("Movimiento NO aplicado → reintento");
-        !navigate_adjacent(TX, TY)
-    }.
-
-// ─────────────────────────────────────────────────────────────
 // BLOQUEO / BACKOFF CON PRIORIDAD
 // El robot de menor prioridad (número mayor) cede el paso.
 // ─────────────────────────────────────────────────────────────
@@ -306,12 +299,21 @@ sign(X, 0).
     if (OtherP < MyP) {
         // El otro tiene más prioridad → yo cedo inmediatamente
         .print("Cedo el paso al robot con mayor prioridad");
+        -+block_streak(0);
         !escape_move(TX, TY)
     } else {
         if (OtherP > MyP) {
-            // Yo tengo más prioridad → espero breve, el otro debería ceder
+            // Yo tengo más prioridad → espero breve, el otro debería ceder.
+            // Si tras varios reintentos el otro sigue parado (p.ej. cargando
+            // o esperando), forzamos escape para no quedarnos atrapados.
             .wait(200);
-            !navigate_to(TX, TY)
+            if (NBC >= 3) {
+                .print("Otro no cede tras ", NBC, " intentos → escape");
+                -+block_streak(0);
+                !escape_move(TX, TY)
+            } else {
+                !navigate_to(TX, TY)
+            }
         } else {
             // Misma prioridad → backoff aleatorio
             .random(R);
@@ -368,7 +370,7 @@ sign(X, 0).
     DX = TX - CX;
     DY = TY - CY;
 
-    if (abs(DX) >= abs(DY)) {
+    if (math.abs(DX) >= math.abs(DY)) {
         Moves = [
             pos(CX, CY + 1),
             pos(CX, CY - 1),
@@ -384,7 +386,7 @@ sign(X, 0).
         ]
     };
 
-    !choose_valid(Moves, NX, NY);
+    !choose_valid(Moves, TX, TY, NX, NY);
     !try_move(NX, NY, TX, TY).
 
 // ─────────────────────────────────────────────────────────────

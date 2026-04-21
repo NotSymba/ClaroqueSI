@@ -426,9 +426,6 @@ public class WarehouseArtifact extends Environment {
             case "busy":
                 addError(agName, "busy", "Robot is already busy or carrying");
                 return true;
-            case "no_task":
-                addPercept(agName, Literal.parseLiteral("no_task"));
-                return true;
             case "cannot_carry":
                 addError(agName, "cannot_carry", "This robot cannot carry the assigned container");
                 return true;
@@ -546,7 +543,8 @@ public class WarehouseArtifact extends Environment {
     // -------------------------------------------------------------------------
     /**
      * Actualiza la percepción de posición de un robot concreto. Formato:
-     * at(RobotId, X, Y)
+     * at(RobotId, X, Y) — sin comillas, consistente con executeSee para que
+     * ?at(Me, _, _) con Me átomo (de .my_name) unifique siempre.
      */
     private void updatePercepts(String agName) {
         Robot robot = model.getRobots().get(agName);
@@ -556,7 +554,7 @@ public class WarehouseArtifact extends Environment {
 
         removePerceptsByUnif(agName, Literal.parseLiteral("at(_,_,_)"));
         addPercept(agName, Literal.parseLiteral(
-                "at(\"" + robot.getId() + "\"," + robot.getX() + "," + robot.getY() + ")"
+                "at(" + robot.getId() + "," + robot.getX() + "," + robot.getY() + ")"
         ));
     }
 

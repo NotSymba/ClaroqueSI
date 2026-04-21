@@ -75,13 +75,18 @@ urgent_shelf(shelf_8).
     !check_all_packages;
     get_container_info(CId).
 
-// Cuando llega la info del contenedor, la cacheamos y la enviamos al
-// supervisor (registro del paquete entrante).
+// Cuando llega la info del contenedor, la cacheamos, la enviamos al
+// supervisor (registro del paquete entrante) y la distribuimos a los
+// robots (así se evita que cada robot la pida al entorno y reciba
+// percepciones duplicadas que provocan encolados repetidos).
 +container_info(CId, W, H, Weight, Type) <-
     V = W * H;
     .abolish(package_info(CId, _, _));
     +package_info(CId, Weight, V);
     .send(supervisor, tell, package_arrived(CId, Weight, V, Type));
+    .send(robot_light,  tell, container_info(CId, W, H, Weight, Type));
+    .send(robot_medium, tell, container_info(CId, W, H, Weight, Type));
+    .send(robot_heavy,  tell, container_info(CId, W, H, Weight, Type));
     .print("Scheduler: log ", CId, " peso=", Weight, " vol=", V, " tipo=", Type);
     -container_info(CId, W, H, Weight, Type).
 

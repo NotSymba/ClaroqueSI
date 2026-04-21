@@ -31,17 +31,17 @@ can_i_manage(W, H, Weight) :-
 
 // ─────────────────────────────────────────────────────────────
 //  NUEVO CONTENEDOR
+//  container_info lo envía el scheduler vía .send(tell). Así se
+//  entrega una única vez por contenedor y podemos abolirlo tras
+//  procesarlo sin depender de que el entorno lo haga.
 // ─────────────────────────────────────────────────────────────
-+new_container(CId) <-
-    get_container_info(CId).
-
 +container_info(CId, W, H, Weight, Type) : can_i_manage(W, H, Weight) <-
-    !enqueue(CId, W, H, Weight, Type).
-   //.abolish(container_info(CId, _, _, _, _)).
+    !enqueue(CId, W, H, Weight, Type);
+    .abolish(container_info(CId, _, _, _, _)).
 
 +container_info(CId, W, H, Weight, Type) <-
-    .print("Contenedor ", CId, " fuera de mi capacidad, ignorado").
-    //.abolish(container_info(CId, _, _, _, _)).
+    .print("Contenedor ", CId, " fuera de mi capacidad, ignorado");
+    .abolish(container_info(CId, _, _, _, _)).
 
 // ─────────────────────────────────────────────────────────────
 //  COLA DE CONTENEDORES

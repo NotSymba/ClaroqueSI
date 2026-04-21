@@ -21,7 +21,10 @@ MAS warehouse {
         robot_heavy [beliefs= "at(robot_heavy, 5 , 3)", beliefs="speed(1)",
                      beliefs="robot_type(heavy)", beliefs="max_weight(100)",
                      beliefs="max_size(2,3)", beliefs="state(idle)"];
-        
+        robot_heavy2 [beliefs= "at(robot_heavy2, 6 , 3)", beliefs="speed(1)",
+                     beliefs="robot_type(heavy)", beliefs="max_weight(100)",
+                     beliefs="max_size(2,3)", beliefs="state(idle)"];
+
         // Agente planificador/scheduler
         scheduler;
         
