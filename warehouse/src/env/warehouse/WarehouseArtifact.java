@@ -129,6 +129,9 @@ public class WarehouseArtifact extends Environment {
                 case "drop_at":
                     return executeDropAt(agName, action);
 
+                case "retrieve":
+                    return executeRetrieve(agName, action);
+
                 case "assignTask":
                     return executeAssignTask(agName, action);
 
@@ -400,11 +403,39 @@ public class WarehouseArtifact extends Environment {
             addError(agName, "invalid_drop", "Robot or shelf not found: " + shelfId);
         } else if (error == 2) {
             addError(agName, "not_carrying", "Robot is not carrying anything");
-            return true; // No es un error fatal, el agente puede continuar
         } else if (error == 3) {
             addError(agName, "too_far", "Shelf too far away: " + shelfId);
         } else if (error == 4) {
             addError(agName, "shelf_full", "Shelf " + shelfId + " cannot store container");
+        }
+        return false;
+    }
+
+    /**
+     * Acción: retrieve(ContainerId) El robot recoge un contenedor desde la
+     * estantería en la que está almacenado, siempre que sea adyacente.
+     * Actualiza el peso/volumen de la estantería al sacar el paquete.
+     */
+    private boolean executeRetrieve(String agName, Structure action) {
+        String containerId = action.getTerm(0).toString().replace("\"", "");
+        int error = model.retrieveFromShelf(agName, action);
+
+        if (error == 0) {
+            viewAct(String.format("%s retrieved %s from shelf", agName, containerId));
+            addPercept(agName, Literal.parseLiteral("picked(" + containerId + ")"));
+            return true;
+        } else if (error == 1) {
+            addError(agName, "invalid_retrieve", "Robot or container not found: " + containerId);
+        } else if (error == 2) {
+            addError(agName, "already_carrying", "Robot is already carrying something");
+        } else if (error == 3) {
+            addError(agName, "too_far", "Not adjacent to shelf storing " + containerId);
+        } else if (error == 4) {
+            addError(agName, "not_in_shelf", "Container not stored on a shelf: " + containerId);
+        } else if (error == 5) {
+            addError(agName, "cannot_carry", "Robot cannot carry container " + containerId);
+        } else {
+            addError(agName, "unknown", "Unexpected error retrieving " + containerId);
         }
         return false;
     }

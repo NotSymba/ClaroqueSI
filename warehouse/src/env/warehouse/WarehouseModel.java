@@ -457,6 +457,75 @@ public class WarehouseModel extends GridWorldModel {
         }
     }
 
+    /**
+     * El robot recoge un contenedor que está almacenado en una estantería.
+     * action: retrieve(containerId)
+     *
+     * Comprueba que el contenedor está asignado a una estantería y que el
+     * robot está adyacente a ella. Actualiza peso y volumen de la estantería
+     * al sacar el paquete.
+     *
+     * Códigos: 0 = ok, 1 = robot/contenedor no encontrado, 2 = robot ya carga,
+     * 3 = robot no adyacente al shelf, 4 = el contenedor no está en un shelf,
+     * 5 = el robot no puede cargar el contenedor, 6 = error inesperado.
+     */
+    public int retrieveFromShelf(String agName, Structure action) {
+        try {
+            String containerId = action.getTerm(0).toString().replace("\"", "");
+
+            Robot robot = robots.get(agName);
+            Container container = containers.get(containerId);
+
+            if (robot == null || container == null) {
+                totalErrors++;
+                return 1;
+            }
+
+            if (robot.isCarrying()) {
+                totalErrors++;
+                return 2;
+            }
+
+            String shelfId = container.getAssignedShelf();
+            if (shelfId == null) {
+                totalErrors++;
+                return 4;
+            }
+
+            Shelf shelf = shelves.get(shelfId);
+            if (shelf == null) {
+                totalErrors++;
+                return 1;
+            }
+
+            if (!isAdjacentToShelf(agName, shelfId)) {
+                totalErrors++;
+                return 3;
+            }
+
+            if (!robot.canCarry(container)) {
+                totalErrors++;
+                return 5;
+            }
+
+            shelf.remove(containerId, container.getWeight(), container.getArea());
+
+            container.setPicked(true);
+            container.setAssignedShelf(null);
+
+            robot.pickup(container);
+
+            System.out.println("Robot " + agName + " retrieved " + containerId
+                    + " from shelf " + shelfId);
+            return 0;
+
+        } catch (Exception e) {
+            e.printStackTrace();
+            totalErrors++;
+            return 6;
+        }
+    }
+
     public int steap(String agName, Structure action) {
         try {
             Robot robot = robots.get(agName);
