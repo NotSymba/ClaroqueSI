@@ -350,14 +350,14 @@ sign(X, 0)  :- X = 0.
 +!escape_move(TX, TY) <- !escape_move(TX, TY, adjacent(false)).
 
 
-// ═════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════
 // IR A RECOGER UN CONTENEDOR CON AUTO-REPLAN
 //
 // Si el scheduler reubica el contenedor durante la navegación,
 // al llegar el robot verifica la posición actual; si cambió,
 // re-navega. La percepción container_relocated es informativa;
 // la verificación post-arribo se encarga del reencaminamiento.
-// ═════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════
 
 +!goto_container(CId) <-
     -container_relocated(CId, _, _);
