@@ -20,6 +20,13 @@ public class WarehouseArtifact extends Environment {
     private ExecutorService containerGeneratorExecutor;
     private volatile boolean running = true;
 
+    // Tipos cuya generación está bloqueada (durante un ciclo de salida).
+    // El scheduler controla este set con las acciones block_generation /
+    // unblock_generation. Usamos un set concurrente porque el loop del
+    // generador corre en hilo dedicado y las acciones las invocan agentes.
+    private final java.util.Set<String> blockedGenerationTypes =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
+
     @Override
     public void init(String[] args) {
         super.init(args);
@@ -55,15 +62,28 @@ public class WarehouseArtifact extends Environment {
             Random rand = new Random();
             while (running) {
                 try {
-                    Thread.sleep(5000 + rand.nextInt(5000));
+                    // Intervalo base 5-10s. Si hay algún tipo bloqueado (ciclo
+                    // de salida activo), lo duplicamos: 10-20s.
+                    long baseDelay = 5000 + rand.nextInt(5000);
+                    long delay = blockedGenerationTypes.isEmpty()
+                            ? baseDelay
+                            : baseDelay * 2L;
+                    Thread.sleep(delay);
 
                     if (!running) {
                         break;
                     }
 
-                    Container container = model.newContainer();
+                    Container container = model.newContainer(blockedGenerationTypes);
                     if (container == null) {
-                        addError("supervisor", "container_generation_failed", "Failed to generate new container");
+                        // Si es por bloqueo total, no es un error — solo saltamos.
+                        if (blockedGenerationTypes.contains("standard")
+                                && blockedGenerationTypes.contains("fragile")
+                                && blockedGenerationTypes.contains("urgent")) {
+                            System.out.println("Generador pausado: todos los tipos bloqueados");
+                        } else {
+                            addError("supervisor", "container_generation_failed", "Failed to generate new container");
+                        }
                         continue;
                     }
 
@@ -79,7 +99,7 @@ public class WarehouseArtifact extends Environment {
                     updateContainerAt(container.getId(), container.getX(), container.getY());
 
                     removePerceptsByUnif( Literal.parseLiteral("new_container(_)"));
-                    addPercept(Literal.parseLiteral("new_container(\"" + container.getId() + "\")"));
+                    addPercept(Literal.parseLiteral("new_container(" + container.getId() + ")"));
 
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
@@ -129,6 +149,9 @@ public class WarehouseArtifact extends Environment {
                 case "drop_at":
                     return executeDropAt(agName, action);
 
+                case "drop_at_exit":
+                    return executeDropAtExit(agName, action);
+
                 case "retrieve":
                     return executeRetrieve(agName, action);
 
@@ -158,6 +181,12 @@ public class WarehouseArtifact extends Environment {
 
                 case "get_shelf_adjacent":
                     return executeGetShelfAdjacent(agName, action);
+
+                case "block_generation":
+                    return executeBlockGeneration(agName, action);
+
+                case "unblock_generation":
+                    return executeUnblockGeneration(agName, action);
 
                 default:
                     System.err.println("Unknown action: " + actionName);
@@ -224,7 +253,7 @@ public class WarehouseArtifact extends Environment {
                     for (Container c : model.getContainers().values()) {
                         if (!c.isPicked() && c.getX() == x && c.getY() == y) {
                             addPercept(agName, Literal.parseLiteral(
-                                    "container(\"" + c.getId() + "\"," + x + "," + y + ")"
+                                    "container(" + c.getId() + "," + x + "," + y + ")"
                             ));
                             break;
                         }
@@ -244,7 +273,7 @@ public class WarehouseArtifact extends Environment {
 
             if (Math.abs(rx - x) + Math.abs(ry - y) <= 1) {
                 addPercept(agName, Literal.parseLiteral(
-                        "robot(\"" + r.getId() + "\"," + x + "," + y + ")"
+                        "robot(" + r.getId() + "," + x + "," + y + ")"
                 ));
             }
         }
@@ -290,10 +319,10 @@ public class WarehouseArtifact extends Environment {
 
         if (error == 0) {
             viewAct(String.format("%s picked up %s", agName, containerId));
-            addPercept(agName, Literal.parseLiteral("picked(\"" + containerId + "\")"));
+            addPercept(agName, Literal.parseLiteral("picked(" + containerId + ")"));
             updateOccupancy(preX, preY, false);
             removePerceptsByUnif("scheduler",
-                    Literal.parseLiteral("container_at(\"" + containerId + "\",_,_)"));
+                    Literal.parseLiteral("container_at(" + containerId + ",_,_)"));
             return true;
         } else if (error == 1) {
             addError(agName, "invalid_pick", "Robot or container not found: " + containerId);
@@ -366,9 +395,9 @@ public class WarehouseArtifact extends Environment {
                     removePerceptsByUnif(robotName,
                             Literal.parseLiteral("location(" + containerId + ",_,_)"));
                     removePerceptsByUnif(robotName, Literal.parseLiteral(
-                            "container_relocated(\"" + containerId + "\",_,_)"));
+                            "container_relocated(" + containerId + ",_,_)"));
                     addPercept(robotName, Literal.parseLiteral(
-                            "container_relocated(\"" + containerId + "\","
+                            "container_relocated(" + containerId + ","
                                     + container.getX() + "," + container.getY() + ")"));
                 }
             }
@@ -412,17 +441,68 @@ public class WarehouseArtifact extends Environment {
     }
 
     /**
+     * Acción: drop_at_exit(ExitX, ExitY)
+     * Deposita el contenedor que carga el robot en una celda de la zona de
+     * salida. El contenedor sale definitivamente del sistema y se notifica al
+     * supervisor/scheduler para que actualicen sus estadísticas y liberen la
+     * estantería de origen si procede.
+     */
+    private boolean executeDropAtExit(String agName, Structure action) {
+        Robot robot = model.getRobots().get(agName);
+        Container carried = robot != null ? robot.getCarriedContainer() : null;
+        String cid = carried != null ? carried.getId() : "?";
+        String type = carried != null ? carried.getType() : "?";
+        double weight = carried != null ? carried.getWeight() : 0.0;
+        int volume = carried != null ? carried.getArea() : 0;
+
+        int error = model.dropAtExit(agName, action);
+
+        if (error == 0) {
+            viewAct(String.format("%s dropped %s at exit", agName, cid));
+            removePerceptsByUnif(agName, Literal.parseLiteral("picked(_)"));
+            addPercept("scheduler", Literal.parseLiteral(
+                    "container_exited(" + cid + "," + type + "," + weight + "," + volume + ")"));
+            addPercept("supervisor", Literal.parseLiteral(
+                    "container_exited(" + cid + "," + type + "," + weight + "," + volume + ")"));
+            return true;
+        } else if (error == 1) {
+            addError(agName, "invalid_exit", "Robot not found");
+        } else if (error == 2) {
+            addError(agName, "not_carrying", "Robot is not carrying anything");
+        } else if (error == 3) {
+            addError(agName, "not_exit_cell", "Destination is not an exit cell");
+        } else if (error == 4) {
+            addError(agName, "exit_out_of_bounds", "Destination outside exit zone");
+        } else if (error == 5) {
+            addError(agName, "too_far", "Robot not adjacent to exit cell");
+        } else {
+            addError(agName, "unknown", "Unexpected error dropping at exit");
+        }
+        return false;
+    }
+
+    /**
      * Acción: retrieve(ContainerId) El robot recoge un contenedor desde la
      * estantería en la que está almacenado, siempre que sea adyacente.
      * Actualiza el peso/volumen de la estantería al sacar el paquete.
      */
     private boolean executeRetrieve(String agName, Structure action) {
         String containerId = action.getTerm(0).toString().replace("\"", "");
+        Container container = model.getContainers().get(containerId);
+        String srcShelf = container != null ? container.getAssignedShelf() : null;
+        double weight = container != null ? container.getWeight() : 0.0;
+        int volume = container != null ? container.getArea() : 0;
+
         int error = model.retrieveFromShelf(agName, action);
 
         if (error == 0) {
             viewAct(String.format("%s retrieved %s from shelf", agName, containerId));
             addPercept(agName, Literal.parseLiteral("picked(" + containerId + ")"));
+            if (srcShelf != null) {
+                addPercept("supervisor", Literal.parseLiteral(
+                        "package_retrieved(" + containerId + "," + srcShelf + ","
+                                + weight + "," + volume + ")"));
+            }
             return true;
         } else if (error == 1) {
             addError(agName, "invalid_retrieve", "Robot or container not found: " + containerId);
@@ -544,12 +624,31 @@ public class WarehouseArtifact extends Environment {
         if (correct) {
             removePerceptsByUnif(agName, Literal.parseLiteral("task(_,_)"));
             addPercept("scheduler", Literal.parseLiteral(
-                    "task_completed(\"" + agName + "\",\"" + containerId + "\",\"" + shelfId + "\")"));
+                    "task_completed(" + agName + "," + containerId + "," + shelfId + ")"));
             viewAct(String.format("%s completed task for %s at %s", agName, containerId, shelfId));
         } else {
             addError(agName, "task_complete_failed", "Failed to complete task for " + containerId);
         }
         return correct;
+    }
+
+    /**
+     * Acción: block_generation(Type) / unblock_generation(Type)
+     * Controlan el set de tipos cuya generación está pausada mientras
+     * dura un ciclo de salida. El scheduler las invoca.
+     */
+    private boolean executeBlockGeneration(String agName, Structure action) {
+        String type = action.getTerm(0).toString().replace("\"", "");
+        blockedGenerationTypes.add(type);
+        viewAct(String.format("Generación de tipo %s pausada (%s)", type, agName));
+        return true;
+    }
+
+    private boolean executeUnblockGeneration(String agName, Structure action) {
+        String type = action.getTerm(0).toString().replace("\"", "");
+        blockedGenerationTypes.remove(type);
+        viewAct(String.format("Generación de tipo %s reanudada (%s)", type, agName));
+        return true;
     }
 
     /**
@@ -611,9 +710,9 @@ public class WarehouseArtifact extends Environment {
      */
     private void updateContainerAt(String containerId, int x, int y) {
         removePerceptsByUnif("scheduler",
-                Literal.parseLiteral("container_at(\"" + containerId + "\",_,_)"));
+                Literal.parseLiteral("container_at(" + containerId + ",_,_)"));
         addPercept("scheduler", Literal.parseLiteral(
-                "container_at(\"" + containerId + "\"," + x + "," + y + ")"));
+                "container_at(" + containerId + "," + x + "," + y + ")"));
     }
 
     private void addError(String agName, String errorType, String data) {
