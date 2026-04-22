@@ -20,17 +20,3 @@ can_i_manage(W, H, Weight) :-
 +!start <-
     .print("Robot light online. Esperando contenedores...");
     see.
-
-// ─────────────────────────────────────────────────────────────
-//  NUEVO CONTENEDOR
-//  container_info lo envía el scheduler vía .send(tell). Así se
-//  entrega una única vez por contenedor y podemos abolirlo tras
-//  procesarlo sin depender de que el entorno lo haga.
-// ─────────────────────────────────────────────────────────────
-+container_info(CId, W, H, Weight, Type) : can_i_manage(W, H, Weight) <-
-    !enqueue(CId, W, H, Weight, Type);
-    .abolish(container_info(CId, _, _, _, _)).
-
-+container_info(CId, W, H, Weight, Type) <-
-    .print("Contenedor ", CId, " fuera de mi capacidad, ignorado");
-    .abolish(container_info(CId, _, _, _, _)).

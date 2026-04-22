@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls \"\\\\\\\\wsl.localhost\\\\Ubuntu-24.04\\\\home\\\\user\\\\escuela\\\\SI\\\\proyecto2\\\\ClaroqueSI\\\\warehouse\\\\\" 2>&1 | head -20)"
+    ]
+  }
+}

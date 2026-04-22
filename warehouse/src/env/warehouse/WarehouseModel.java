@@ -153,13 +153,28 @@ public class WarehouseModel extends GridWorldModel {
      * no hay slots disponibles.
      */
     public Container newContainer() {
+        return newContainer(java.util.Collections.emptySet());
+    }
+
+    /**
+     * Genera un nuevo contenedor evitando los tipos indicados en blockedTypes
+     * (ciclo de salida activo). Si los tres tipos están bloqueados devuelve
+     * null sin consumir slot.
+     */
+    public Container newContainer(Set<String> blockedTypes) {
         if (freeEntranceSlots.isEmpty()) {
             System.out.println("No free entrance slots available!");
             totalErrors++;
             return null;
         }
+        if (blockedTypes.contains("standard")
+                && blockedTypes.contains("fragile")
+                && blockedTypes.contains("urgent")) {
+            // Todos los tipos bloqueados — no se genera nada.
+            return null;
+        }
 
-        Container container = generateRandomContainerFair();
+        Container container = generateRandomContainerFair(blockedTypes);
         if (container == null) {
             return null;
         }
@@ -171,6 +186,10 @@ public class WarehouseModel extends GridWorldModel {
     }
 
     private Container generateRandomContainerFair() {
+        return generateRandomContainerFair(java.util.Collections.emptySet());
+    }
+
+    private Container generateRandomContainerFair(Set<String> blockedTypes) {
         // Consume un slot libre del pool
         Location slot = freeEntranceSlots.poll();
         if (slot == null) {
@@ -203,14 +222,29 @@ public class WarehouseModel extends GridWorldModel {
             weight = 30 + rand.nextDouble() * 70;
         }
 
-        double r = rand.nextDouble();
-        String type;
-        if (r < 0.70) {
-            type = "standard";
-        } else if (r < 0.85) {
-            type = "fragile";
-        } else {
-            type = "urgent";
+        // Sorteo ponderado estándar 0.70 / fragile 0.15 / urgent 0.15,
+        // descartando tipos bloqueados y renormalizando pesos.
+        Map<String, Double> weights = new LinkedHashMap<>();
+        if (!blockedTypes.contains("standard")) weights.put("standard", 0.70);
+        if (!blockedTypes.contains("fragile"))  weights.put("fragile",  0.15);
+        if (!blockedTypes.contains("urgent"))   weights.put("urgent",   0.15);
+        double totalW = 0.0;
+        for (Double w : weights.values()) totalW += w;
+
+        double r = rand.nextDouble() * totalW;
+        double acc = 0.0;
+        String type = null;
+        for (Map.Entry<String, Double> e : weights.entrySet()) {
+            acc += e.getValue();
+            if (r <= acc) {
+                type = e.getKey();
+                break;
+            }
+        }
+        if (type == null) {
+            // No debería ocurrir si blockedTypes no contiene los tres tipos.
+            freeEntranceSlots.offer(slot);
+            return null;
         }
 
         grid[slot.getX()][slot.getY()] = CellType.PACKAGE;
@@ -412,6 +446,59 @@ public class WarehouseModel extends GridWorldModel {
             e.printStackTrace();
             totalErrors++;
             return 5;
+        }
+    }
+
+    /**
+     * El robot deposita el contenedor que carga en una celda de la zona de
+     * salida (EXIT, x in [0..2], y in [0..1]). El contenedor sale definitivamente
+     * del sistema.
+     *
+     * action: drop_at_exit(ExitX, ExitY)
+     *
+     * Códigos: 0 = ok, 1 = robot no encontrado, 2 = robot no carga nada,
+     * 3 = celda no es EXIT, 4 = fuera de zona de salida, 5 = robot no adyacente,
+     * 6 = error inesperado.
+     */
+    public int dropAtExit(String agName, Structure action) {
+        try {
+            int destX = Integer.parseInt(action.getTerm(0).toString().replace("\"", ""));
+            int destY = Integer.parseInt(action.getTerm(1).toString().replace("\"", ""));
+
+            Robot robot = robots.get(agName);
+            if (robot == null) {
+                totalErrors++;
+                return 1;
+            }
+            if (!robot.isCarrying()) {
+                totalErrors++;
+                return 2;
+            }
+            if (destX < 0 || destX >= 3 || destY < 0 || destY >= 2) {
+                totalErrors++;
+                return 4;
+            }
+            if (grid[destX][destY] != CellType.EXIT) {
+                totalErrors++;
+                return 3;
+            }
+            if (robot.distanceTo(destX, destY) > 1) {
+                totalErrors++;
+                return 5;
+            }
+
+            Container container = robot.getCarriedContainer();
+            String cid = container.getId();
+            robot.drop();
+            containers.remove(cid);
+            totalContainersProcessed++;
+            System.out.println("Container " + cid + " exited warehouse via ("
+                    + destX + "," + destY + ")");
+            return 0;
+        } catch (Exception e) {
+            e.printStackTrace();
+            totalErrors++;
+            return 6;
         }
     }
 
