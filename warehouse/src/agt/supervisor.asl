@@ -181,6 +181,9 @@ group_types(urgent, [urgent]).
         +blocked_group_notified(Group);
         .print("Supervisor: grupo ", Group, " al ", UW, "/", MW, "kg (", UV, "/", MV, "u³) ≥ ",
                R*100, "% — avisando scheduler con no_space(", Type, ")");
+        .time(HH, MM, SS);
+        .print("EVENT | time=", HH, ":", MM, ":", SS,
+               " | agent=supervisor | type=no_space_detected | data=", Group);
         .send(scheduler, tell, no_space(Type))
     }.
 

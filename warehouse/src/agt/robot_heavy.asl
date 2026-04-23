@@ -51,7 +51,9 @@ can_i_manage(W, H, Weight) :-
 // Regla de reparto (MiLen = mi cola, OLen = cola de heavy2):
 //   MiLen < OLen                         → yo
 //   MiLen > OLen                         → heavy2
-//   empate y yo idle/going_idle          → yo
+//   empate y yo idle                     → yo
+//   empate, yo going_idle, heavy2 idle   → heavy2 (heavy2 ya está parado, más cerca)
+//   empate y yo going_idle               → yo
 //   empate y heavy2 idle/going_idle      → heavy2
 //   empate ambos ocupados                → yo (tiebreaker fijo)
 +!decide_heavy(CId, W, H, Weight, Type) :
@@ -82,6 +84,10 @@ can_i_manage(W, H, Weight) :-
 +!route_heavy(CId, W, H, Weight, Type, _, idle, _, _) <-
     .print("Empate y yo idle → tomo ", CId);
     !enqueue(CId, W, H, Weight, Type).
+
++!route_heavy(CId, W, H, Weight, Type, _, going_idle, _, idle) <-
+    .print("Empate: yo going_idle pero heavy2 idle → asigno ", CId, " (heavy2 más cerca)");
+    .send(robot_heavy2, tell, assign_here(CId, W, H, Weight, Type)).
 
 +!route_heavy(CId, W, H, Weight, Type, _, going_idle, _, _) <-
     .print("Empate y yo going_idle → tomo ", CId);

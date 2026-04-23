@@ -410,6 +410,9 @@ unstorable_threshold(3).
     !block_all_types;
     .send(supervisor, tell, exit_cycle_started);
     .print("Scheduler: T0 — INICIO ciclo de salida (disparado por grupo ", TriggerGroup, ")");
+    .time(HH, MM, SS);
+    .print("EVENT | time=", HH, ":", MM, ":", SS,
+           " | agent=scheduler | type=output_phase_started | data=", TriggerGroup);
     !run_deadline(short, [urgent],            1);   // ΔT·1
     !run_deadline(long,  [standard, fragile], 2);   // ΔT·2 → [T0+ΔT, T0+3ΔT]
     !end_exit_cycle.
