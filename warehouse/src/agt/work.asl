@@ -61,7 +61,6 @@ accepts(Type,   S) :- regular_container(Type) & regular_shelf(S).
 // Celdas libres de la zona de salida (todas inicialmente).
 exit_cell(0,0). exit_cell(0,1). exit_cell(1,0). exit_cell(1,1).
 exit_cell(2,0). exit_cell(2,1).
-
 // ─────────────────────────────────────────────────────────────
 //  ANUNCIO DE CONTENEDOR DISPONIBLE (desde scheduler)
 //  robot_heavy define is_router_robot y sobreescribe este plan con

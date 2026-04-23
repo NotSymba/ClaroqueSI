@@ -76,21 +76,6 @@ robot_shelf_priority(robot_medium, [shelf_6, shelf_7, shelf_2, shelf_3, shelf_4,
 robot_shelf_priority(robot_heavy,  [shelf_9, shelf_6, shelf_7, shelf_2, shelf_3, shelf_4]).
 robot_shelf_priority(robot_heavy2, [shelf_9, shelf_6, shelf_7, shelf_2, shelf_3, shelf_4]).
 
-/* ----------------------------------------------------------------------------
- *  GRUPOS DE TIPO para el ciclo de salida.
- *    standard y fragile comparten shelves → mismo grupo "normal".
- *    urgent va aparte.
- *  Todo el mecanismo de bloqueo/exit opera sobre grupos, no sobre tipos
- *  individuales. La regla blocked_type/1 traduce tipo→grupo para que los
- *  planes que comprueban "tipo bloqueado" sigan funcionando.
- * -------------------------------------------------------------------------- */
-type_group(standard, normal).
-type_group(fragile,  normal).
-type_group(urgent,   urgent).
-
-group_types(normal, [standard, fragile]).
-group_types(urgent, [urgent]).
-
 blocked_type(Type) :- type_group(Type, G) & blocked_group(G).
 
 !start.
@@ -446,21 +431,23 @@ deadline_for_group(normal, long,  [standard, fragile], 2).
     !end_exit_cycle(Group).
 
 /* Bloqueo selectivo: sólo los tipos del grupo activo. */
-+!block_group_types(urgent) <-
-    block_generation(urgent);
-    +blocked_group(urgent).
-+!block_group_types(normal) <-
-    block_generation(standard);
-    block_generation(fragile);
-    +blocked_group(normal).
++!block_group_types(Group) : deadline_for_group(Group, _, Types, _) <-
+    +blocked_group(Group);
+    !block_each(Types).
 
-+!unblock_group_types(urgent) <-
-    unblock_generation(urgent);
-    -blocked_group(urgent).
-+!unblock_group_types(normal) <-
-    unblock_generation(standard);
-    unblock_generation(fragile);
-    -blocked_group(normal).
++!block_each([]).
++!block_each([Type | Rest]) <-
+    block_generation(Type);
+    !block_each(Rest).
+
++!unblock_group_types(Group) : deadline_for_group(Group, _, Types, _) <-
+    -blocked_group(Group);
+    !unblock_each(Types).
+
++!unblock_each([]).
++!unblock_each([Type | Rest]) <-
+    unblock_generation(Type);
+    !unblock_each(Rest).
 
 /* ---------------------------------------------------------------------------
  *  Un deadline: arma listas, publica, espera Duration ms, limpia.

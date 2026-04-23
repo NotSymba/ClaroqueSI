@@ -89,8 +89,7 @@ type_group(standard, normal).
 type_group(fragile,  normal).
 type_group(urgent,   urgent).
 
-group_types(normal, [standard, fragile]).
-group_types(urgent, [urgent]).
+
 
 !start.
 
@@ -191,8 +190,7 @@ group_types(urgent, [urgent]).
  * cuenta una sola vez aunque admita varios tipos del grupo. */
 +!sum_group_usage(Group, UW, UV, MW, MV) <-
     .findall(S,
-             (group_types(Group, Types) & .member(T, Types) &
-              shelf_accepts(T, S)),
+             (type_group(T, Group) & shelf_accepts(T, S)),
              RawShelves);
     !dedup(RawShelves, Shelves);
     .findall(used(W, V),
