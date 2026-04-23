@@ -313,6 +313,9 @@ exit_cell(2,0). exit_cell(2,1).
 +!finish_task(CId, Shelf) <-
     task_complete(CId, Shelf);
     .send(scheduler, tell, guardado(CId, Shelf));
+    // Memoria local de ownership: "este CId lo guardé yo". Se usa durante
+    // los deadlines para que sólo su dueño intente sacarlo del almacén.
+    +my_stored(CId);
     // Depositado OK → limpiamos blacklists que hubiéramos marcado por fallos
     // puntuales; así el próximo drop vuelve a considerar todas las shelves.
     .abolish(shelf_blacklist(_));
@@ -356,6 +359,13 @@ exit_cell(2,0). exit_cell(2,1).
 // Regla auxiliar: ¿puedo cargar este peso?
 can_i_manage_weight(Weight) :-
     max_weight(MaxW) & Weight <= MaxW.
+
+// Regla de autonomía: durante un deadline cada robot sólo se interesa por
+//   · los paquetes que él mismo guardó (at_shelf + my_stored)
+//   · los unstorable que quedaron en la entrada (at_entry, sin dueño)
+// Así el scheduler no tiene que asignar nadie: cada robot filtra solo.
+can_i_exit(CId, at_shelf(_))   :- my_stored(CId).
+can_i_exit(_,   at_entry(_,_)).
 
 // ─── Recepción de un exit_item ──────────────────────────────
 // Si lo puedo cargar, intento avanzar. Si no, me quedo con la
@@ -424,7 +434,9 @@ can_i_manage_weight(Weight) :-
     see;
     ?at(Me, RX, RY);
     .findall(ex(CId, Loc, W, V, Type, Kind),
-             (exit_item(CId, Loc, W, V, Type, Kind) & can_i_manage_weight(W)),
+             (exit_item(CId, Loc, W, V, Type, Kind) &
+              can_i_manage_weight(W) &
+              can_i_exit(CId, Loc)),
              Cands);
     !pick_closest_exit(Cands, RX, RY, none, 999999, Best).
 
@@ -472,6 +484,8 @@ can_i_manage_weight(Weight) :-
     retrieve(CId);
     !go_to_exit_cell(EX, EY);
     drop_at_exit(EX, EY);
+    // Ya lo saqué: libero mi ownership local.
+    -my_stored(CId);
     .send(scheduler, tell, exit_done(CId, Type));
     .abolish(exit_item(CId, _, _, _, _, _));
     -exit_in_progress(_);

@@ -271,10 +271,10 @@ group_types(urgent, [urgent]).
     .print("Supervisor: scheduler ha iniciado el ciclo de salida");
     -exit_cycle_started[source(scheduler)].
 
-+exit_cycle_ended[source(scheduler)] <-
-    .abolish(blocked_group_notified(_));
-    .print("Supervisor: ciclo de salida terminado — notificaciones de grupo reseteadas");
-    -exit_cycle_ended[source(scheduler)].
++exit_cycle_ended(Group)[source(scheduler)] <-
+    -blocked_group_notified(Group);
+    .print("Supervisor: deadline del grupo ", Group, " terminado — notificación reseteada");
+    -exit_cycle_ended(Group)[source(scheduler)].
 
 /* ============================================================================
  * LIST_STORED — protocolo de apoyo al scheduler en el ciclo de salida
