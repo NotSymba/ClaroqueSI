@@ -8,8 +8,9 @@
  *      (stored_at(CId, Shelf, Type, Weight, Volume)).
  *   4. Detectar falta de espacio POR TIPO de contenedor y avisar al scheduler
  *      con no_space(Type). Al liberarse espacio, avisar con space_available(Type).
- *   5. Proveer al scheduler un candidato de desalojo cuando éste lanza el ciclo
- *      de salida (request_exit_candidate(Type) → exit_candidate(...)).
+ *   5. Proveer al scheduler la lista de paquetes almacenados de un grupo
+ *      cuando abre un deadline de salida (list_stored(Types, Kind) →
+ *      stored_list_response(Kind, [...])).
  ******************************************************************************/
 
 /* ============================================================================
@@ -260,33 +261,69 @@ group_types(urgent, [urgent]).
     .print("Supervisor: ciclo de salida del grupo ", Group, " completado");
     -exit_cycle_done(Group)[source(scheduler)].
 
+/* El scheduler avisa del inicio y fin del ciclo de salida (protocolo por
+ * deadlines). Al terminar, reseteamos TODAS las notificaciones de grupo
+ * para poder volver a disparar no_space si vuelve la saturación. */
++exit_cycle_started[source(scheduler)] <-
+    .print("Supervisor: scheduler ha iniciado el ciclo de salida");
+    -exit_cycle_started[source(scheduler)].
+
++exit_cycle_ended[source(scheduler)] <-
+    .abolish(blocked_group_notified(_));
+    .print("Supervisor: ciclo de salida terminado — notificaciones de grupo reseteadas");
+    -exit_cycle_ended[source(scheduler)].
+
+/* ============================================================================
+ * LIST_STORED — protocolo de apoyo al scheduler en el ciclo de salida
+ *
+ *   El scheduler, al abrir un deadline, nos pide la lista de paquetes
+ *   almacenados de los tipos que salen en ese deadline:
+ *
+ *       achieve list_stored(Types, Kind)
+ *
+ *   Respondemos con:
+ *
+ *       tell stored_list_response(Kind, L)
+ *
+ *   donde L es una lista de s(CId, Shelf, Weight, Volume, Type) con todos
+ *   los stored_at/5 cuyo tipo está en Types.
+ * ============================================================================ */
++!list_stored(Types, Kind)[source(scheduler)] <-
+    .findall(s(CId, Shelf, Weight, Volume, Type),
+             (stored_at(CId, Shelf, Type, Weight, Volume) &
+              .member(Type, Types)),
+             L);
+    .length(L, N);
+    .print("Supervisor: list_stored(", Types, ", ", Kind, ") → ", N, " items");
+    .send(scheduler, tell, stored_list_response(Kind, L)).
+
 /* ============================================================================
  * SELECCIÓN DE SHELF PARA GUARDAR (protocolo con scheduler)
  *
  *   El scheduler construye una lista de shelves ordenada por la prioridad
  *   del robot y nos la manda; aquí recorremos IN ORDER y contestamos al robot
- *   (Requester) con la primera que tiene capacidad real (no shelf_full_marked
- *   y, si tenemos peso/volumen, UW+Weight ≤ MaxW y UV+V ≤ MaxV).
+ *   (Requester) con la primera que tiene CAPACIDAD REAL para el paquete:
+ *   UW+Weight ≤ MaxW  y  UV+V ≤ MaxV.
+ *
+ *   Ojo: shelf_full_marked/1 es sólo informativo (umbral del 90 % para alertas
+ *   y métricas). NO se usa para excluir shelves aquí, porque una shelf al 91 %
+ *   puede seguir aceptando paquetes pequeños. La decisión se toma siempre
+ *   sobre la capacidad real.
  *
  *   Si la lista se agota sin encontrar nada libre, respondemos none.
  * ============================================================================ */
 
-+!pick_first_free(CId, _, _, [], Requester)[source(scheduler)] <-
++!pick_first_free(CId, _, _, [], Requester) <-
     .print("Supervisor: sin shelf libre para ", CId, " → informo none a ", Requester);
     .send(Requester, tell, shelf_suggestion(CId, none)).
 
-/* Shelf marcada llena por near_full_ratio → saltamos */
-+!pick_first_free(CId, Weight, V, [S | Rest], Requester)[source(scheduler)] :
-        shelf_full_marked(S) <-
-    !pick_first_free(CId, Weight, V, Rest, Requester).
-
-/* Sin peso/vol conocido → aceptamos si no está marcada llena */
-+!pick_first_free(CId, 0, 0, [S | _], Requester)[source(scheduler)] <-
+/* Sin peso/vol conocido → aceptamos la primera */
++!pick_first_free(CId, 0, 0, [S | _], Requester) <-
     .print("Supervisor: shelf ", S, " para ", CId, " (sin peso/vol)");
     .send(Requester, tell, shelf_suggestion(CId, S)).
 
 /* Con peso/vol: comprobamos que quepa nominalmente */
-+!pick_first_free(CId, Weight, V, [S | _], Requester)[source(scheduler)] :
++!pick_first_free(CId, Weight, V, [S | _], Requester) :
         shelf_capacity(S, MaxW, MaxV) & shelf_usage(S, UW, UV) &
         UW + Weight <= MaxW & UV + V <= MaxV <-
     .print("Supervisor: shelf ", S, " para ", CId, " — cabe (", UW+Weight, "/", MaxW, "kg, ",
@@ -294,23 +331,8 @@ group_types(urgent, [urgent]).
     .send(Requester, tell, shelf_suggestion(CId, S)).
 
 /* No cabe → probamos la siguiente */
-+!pick_first_free(CId, Weight, V, [_ | Rest], Requester)[source(scheduler)] <-
++!pick_first_free(CId, Weight, V, [_ | Rest], Requester) <-
     !pick_first_free(CId, Weight, V, Rest, Requester).
-
-/* ============================================================================
- * CANDIDATO DE DESALOJO (responde al scheduler en el ciclo de salida)
- *   Elige el primer paquete almacenado de CUALQUIER tipo del grupo.
- * ============================================================================ */
-
-+!request_exit_candidate(Group)[source(scheduler)] :
-        group_types(Group, Types) &
-        stored_at(CId, Shelf, Type, Weight, Volume) & .member(Type, Types) <-
-    .send(scheduler, tell,
-          exit_candidate(CId, Shelf, Weight, Volume, Type, Group)).
-
-+!request_exit_candidate(Group)[source(scheduler)] <-
-    .print("Supervisor: no hay stored_at para grupo ", Group, " — no puedo desalojar");
-    .send(scheduler, tell, exit_candidate(none, none, 0, 0, unknown, Group)).
 
 /* ============================================================================
  * ESTADÍSTICAS Y ESTADO DE ROBOTS

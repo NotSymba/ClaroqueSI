@@ -322,24 +322,48 @@ blocked_type(Type) :- type_group(Type, G) & blocked_group(G).
     !filter_passable(Rest, Visited, Out).
 
 /* ============================================================================
- *  CONTADOR DE UNSTORABLE + DISPARO DE SALIDA  (agrupado por type_group)
+ *  CICLO DE SALIDA POR DEADLINES
  *
- *  Todo el mecanismo opera sobre GRUPOS (normal = standard∪fragile, urgent).
- *  Cuando un paquete es unstorable, se apunta en unstorable_pending(Group, L).
- *  Si se acumulan `unstorable_threshold` del grupo, o el supervisor avisa
- *  no_space de un tipo del grupo, inicia el ciclo de salida del grupo.
+ *  Disparador: supervisor avisa no_space(Type). Ese instante es T0.
+ *    - se bloquea la generación de TODOS los tipos (para no solapar fases).
+ *    - se arranca un ciclo de salida que consta de DOS deadlines NO solapados:
+ *        · Deadline corto [T0, T0+ΔT]          → sólo URGENTES
+ *        · Deadline largo [T0+ΔT, T0+3·ΔT]     → sólo NO-URGENTES
+ *    - al vencer el deadline largo termina el ciclo y se reanuda la generación.
  *
- *  Durante el ciclo de salida:
- *    1. fase stored_phase: pedimos candidatos (almacenados) del grupo al
- *       supervisor y los mandamos a la salida uno a uno.
- *    2. fase unstorable_phase: enviamos los unstorable_pending del grupo
- *       directamente a la salida desde la zona de entrada.
- *    3. al acabar: desbloqueamos generación de TODOS los tipos del grupo,
- *       limpiamos blocked_group y flush de pendientes.
+ *  ΔT = 20 s. Se eligió 20 s como compromiso entre (a) tiempo realista para que
+ *  los robots lentos puedan completar al menos una entrega de su deadline
+ *  (movimiento medio ~10-15 celdas a 100-500 ms/celda, cf. timePerMove de cada
+ *  robot) y (b) no alargar el experimento en exceso; 3·ΔT = 60 s deja margen
+ *  para vaciar varios paquetes no-urgentes con 4 robots trabajando en paralelo.
+ *
+ *  Protocolo de salida (robots autónomos, SIN asignación explícita):
+ *    1. Scheduler construye dos listas cuando empieza cada deadline:
+ *         · stored en shelves "propias" del deadline (S1/S5/S8 | resto)
+ *         · unstorable acumulados del grupo correspondiente
+ *    2. Para cada contenedor, envía a todos los robots:
+ *         tell exit_item(CId, Loc, Weight, V, Type, Kind)
+ *       donde Loc = at_shelf(S) | at_entry(X,Y), Kind = short | long.
+ *    3. Robots ven los exit_item, deciden cuál coger (capacidad + distancia).
+ *       Para evitar colisiones, piden claim al scheduler antes de retirar:
+ *         achieve claim_exit(CId, Me)   → claim_result(CId, granted|denied)
+ *       Al conceder claim, scheduler broadcasts exit_taken(CId) para que los
+ *       demás abolishen su copia local del exit_item.
+ *    4. Robot ejecuta (retrieve/pickup + drop_at_exit) y avisa:
+ *         tell exit_done(CId, Type)  →  el scheduler cuenta y avisa a transport.
+ *    5. Al vencer el deadline, scheduler abolish los exit_item restantes en
+ *       todos los robots; el siguiente deadline los reemplaza.
+ *
+ *  Transport: agente externo que "recoge" los contenedores salidos en cada
+ *  deadline (load_start / container_shipped / load_end).
  * ============================================================================ */
+
+delta_t(20000).  // ΔT en milisegundos
 
 unstorable_threshold(3).
 
+/* Registro de unstorable (sigue siendo por GRUPO para que al disparar el ciclo
+ * tengamos la lista de pendientes del grupo adecuado). */
 +unstorable(CId, Type)[source(_)] <-
     -unstorable(CId, Type)[source(_)];
     ?type_group(Type, Group);
@@ -362,166 +386,204 @@ unstorable_threshold(3).
     !check_unstorable_threshold(Group, 1).
 
 +!check_unstorable_threshold(Group, N) :
-        unstorable_threshold(T) & N >= T & not blocked_group(Group) <-
-    .print("Scheduler: umbral unstorable alcanzado para grupo ", Group);
-    !trigger_exit_cycle(Group).
+        unstorable_threshold(T) & N >= T & not exit_cycle_active <-
+    .print("Scheduler: umbral unstorable alcanzado para grupo ", Group, " — disparo ciclo");
+    !begin_exit_cycle(Group).
 +!check_unstorable_threshold(_, _).
 
+/* Disparador desde supervisor: 70 % de un tipo */
 +no_space(Type)[source(supervisor)] :
-        type_group(Type, Group) & not blocked_group(Group) <-
+        type_group(Type, Group) & not exit_cycle_active <-
     .print("Scheduler: supervisor avisa no_space(", Type, ") — grupo ", Group);
     -no_space(Type)[source(supervisor)];
-    !trigger_exit_cycle(Group).
+    !begin_exit_cycle(Group).
 
 +no_space(Type)[source(supervisor)] <-
     -no_space(Type)[source(supervisor)].
 
-+!trigger_exit_cycle(Group) :
-        group_types(Group, Types) <-
-    +blocked_group(Group);
-    +exit_phase(Group, stored_phase);
-    !block_all_generation(Types);
-    .print("Scheduler: INICIO ciclo salida grupo ", Group, " (tipos ", Types, ") — bloqueo entrada");
-    .send(supervisor, achieve, request_exit_candidate(Group)).
+/* ---------------------------------------------------------------------------
+ *  Arranque del ciclo (T0) — bloquea generación y lanza los dos deadlines
+ * ------------------------------------------------------------------------- */
++!begin_exit_cycle(TriggerGroup) <-
+    +exit_cycle_active;
+    +trigger_group(TriggerGroup);
+    !block_all_types;
+    .send(supervisor, tell, exit_cycle_started);
+    .print("Scheduler: T0 — INICIO ciclo de salida (disparado por grupo ", TriggerGroup, ")");
+    !run_deadline(short, [urgent],            1);   // ΔT·1
+    !run_deadline(long,  [standard, fragile], 2);   // ΔT·2 → [T0+ΔT, T0+3ΔT]
+    !end_exit_cycle.
 
-+!block_all_generation([]).
-+!block_all_generation([T | Rest]) <-
-    block_generation(T);
-    !block_all_generation(Rest).
++!block_all_types <-
+    block_generation(urgent);
+    block_generation(standard);
+    block_generation(fragile);
+    +blocked_group(urgent);
+    +blocked_group(normal).
 
-+!unblock_all_generation([]).
-+!unblock_all_generation([T | Rest]) <-
-    unblock_generation(T);
-    !unblock_all_generation(Rest).
++!unblock_all_types <-
+    unblock_generation(urgent);
+    unblock_generation(standard);
+    unblock_generation(fragile);
+    -blocked_group(urgent);
+    -blocked_group(normal).
 
-/* -------- FASE 1: desalojo de paquetes almacenados -------- */
-/* El supervisor responde con exit_candidate(CId, Shelf, Weight, V, Type, Group).
- * CId=none significa "no quedan almacenados de ese grupo". */
+/* ---------------------------------------------------------------------------
+ *  Un deadline: arma listas, publica, espera Duration ms, limpia.
+ * ------------------------------------------------------------------------- */
++!run_deadline(Kind, Types, Factor) :
+        delta_t(DT) <-
+    Duration = DT * Factor;
+    .print("Scheduler: DEADLINE ", Kind, " activo — tipos=", Types, ", duración=", Duration, "ms");
+    +active_deadline(Kind);
+    +deadline_shipped_count(Kind, 0);
+    .send(transport, tell, load_start(Kind, Types));
+    !broadcast_deadline_start(Kind);
+    !publish_stored_items(Types, Kind);
+    !publish_unstorable_items(Types, Kind);
+    .wait(Duration);
+    !close_deadline(Kind).
 
-+exit_candidate(CId, Shelf, Weight, V, Type, _Group)[source(supervisor)] :
-        CId \== none <-
-    .print("Scheduler: desaloja ", CId, " (", Type, ") de ", Shelf);
-    !dispatch_exit(CId, Shelf, Weight, V, Type);
-    -exit_candidate(CId, Shelf, Weight, V, Type, _Group)[source(supervisor)].
++!close_deadline(Kind) <-
+    .print("Scheduler: DEADLINE ", Kind, " cerrado");
+    -active_deadline(Kind);
+    ?deadline_shipped_count(Kind, N);
+    -deadline_shipped_count(Kind, _);
+    .send(transport, tell, load_end(Kind, N));
+    !broadcast_deadline_end(Kind);
+    !abolish_all_exit_items(Kind).
 
-+exit_candidate(none, _, _, _, _, Group)[source(supervisor)] <-
-    .print("Scheduler: supervisor sin más stored del grupo ", Group, " → paso a unstorable");
-    -exit_candidate(none, _, _, _, _, Group)[source(supervisor)];
-    -+exit_phase(Group, unstorable_phase);
-    !dispatch_next_unstorable(Group).
+/* Publica la lista de stored pidiéndosela al supervisor */
++!publish_stored_items(Types, Kind) <-
+    .abolish(stored_list_response(_, _));
+    .send(supervisor, achieve, list_stored(Types, Kind));
+    .wait({+stored_list_response(Kind, _)}, 3000, _);
+    if (stored_list_response(Kind, L)) {
+        .abolish(stored_list_response(Kind, _));
+        !publish_stored_list(L, Kind)
+    } else {
+        .print("Scheduler: timeout esperando stored_list de ", Kind)
+    }.
 
-/* Envío del encargo de salida. Para evitar carreras (dos robots intentando
- * retirar el mismo CId → error invalid_retrieve), mandamos SÓLO al robot
- * más adecuado según peso/volumen. Si ese robot no puede (ocupado, por
- * ejemplo), al próximo container_exited re-disparamos.
- *   Weight <= 10 y V <= 1  → light
- *   Weight <= 30 y V <= 2  → medium
- *   resto                  → heavy (que coordina con heavy2 vía router)
- */
-+!dispatch_exit(CId, Shelf, Weight, V, Type) <-
-    !pick_exit_robot(Weight, V, Target);
-    .print("Scheduler: exit_order ", CId, " (peso=", Weight, ", vol=", V, ") → ", Target);
-    .send(Target, tell, exit_order(CId, Shelf, Weight, V, Type)).
++!publish_stored_list([], _).
++!publish_stored_list([s(CId, Shelf, W, V, Type) | Rest], Kind) <-
+    !publish_exit_item(CId, at_shelf(Shelf), W, V, Type, Kind);
+    !publish_stored_list(Rest, Kind).
 
-+!pick_exit_robot(Weight, V, robot_light) :
-        Weight <= 10 & V <= 1.
-+!pick_exit_robot(Weight, V, robot_medium) :
-        Weight <= 30 & V <= 2.
-+!pick_exit_robot(_, _, robot_heavy).
+/* Publica los unstorable de los tipos del deadline que aún están en la entrada */
++!publish_unstorable_items([], _).
++!publish_unstorable_items([T | Rest], Kind) <-
+    ?type_group(T, G);
+    !publish_unstorable_for_group(G, Kind);
+    !publish_unstorable_items(Rest, Kind).
 
-/* Un robot nos avisa si no puede con un exit_order; escalamos al siguiente
- * robot más capaz. Shelf=none significa que venía de exit_direct_order. */
-+exit_reject(CId, Shelf, Weight, V, Type)[source(Robot)] <-
-    .print("Scheduler: ", Robot, " rechaza ", CId, " (peso=", Weight, ") — escalando");
-    -exit_reject(CId, Shelf, Weight, V, Type)[source(Robot)];
-    !escalate_exit(CId, Shelf, Weight, V, Type, Robot).
++!publish_unstorable_for_group(G, Kind) :
+        unstorable_pending(G, L) <-
+    !publish_unstorable_list(L, G, Kind).
++!publish_unstorable_for_group(_, _).
 
-+!escalate_exit(CId, Shelf, Weight, V, Type, robot_light) :
-        Shelf \== none <-
-    .send(robot_medium, tell, exit_order(CId, Shelf, Weight, V, Type)).
-+!escalate_exit(CId, _, Weight, V, Type, robot_light) <-
-    .send(robot_medium, tell, exit_direct_order(CId, Weight, V, Type)).
++!publish_unstorable_list([], _, _).
++!publish_unstorable_list([CId | Rest], G, Kind) :
+        container_at(CId, X, Y) & package_info(CId, W, V, Type) <-
+    !publish_exit_item(CId, at_entry(X, Y), W, V, Type, Kind);
+    !publish_unstorable_list(Rest, G, Kind).
++!publish_unstorable_list([_ | Rest], G, Kind) <-
+    !publish_unstorable_list(Rest, G, Kind).
 
-+!escalate_exit(CId, Shelf, Weight, V, Type, robot_medium) :
-        Shelf \== none <-
-    .send(robot_heavy, tell, exit_order(CId, Shelf, Weight, V, Type)).
-+!escalate_exit(CId, _, Weight, V, Type, robot_medium) <-
-    .send(robot_heavy, tell, exit_direct_order(CId, Weight, V, Type)).
+/* Registra el exit_item local y lo envía a los cuatro robots */
++!publish_exit_item(CId, Loc, W, V, Type, Kind) <-
+    +pending_exit(CId, Loc, W, V, Type, Kind);
+    .send(robot_light,  tell, exit_item(CId, Loc, W, V, Type, Kind));
+    .send(robot_medium, tell, exit_item(CId, Loc, W, V, Type, Kind));
+    .send(robot_heavy,  tell, exit_item(CId, Loc, W, V, Type, Kind));
+    .send(robot_heavy2, tell, exit_item(CId, Loc, W, V, Type, Kind)).
 
-+!escalate_exit(CId, _, _, _, _, _) <-
-    .print("Scheduler: sin escalada posible para ", CId, " — ciclo puede bloquearse").
++!broadcast_deadline_start(Kind) <-
+    .broadcast(tell, active_deadline(Kind)).
 
-/* -------- FASE 2: unstorable que se llevan desde la zona de entrada -------- */
++!broadcast_deadline_end(Kind) <-
+    .broadcast(untell, active_deadline(Kind)).
 
-+!dispatch_next_unstorable(Group) :
-        unstorable_pending(Group, []) <-
-    !finish_exit_cycle(Group).
+/* Al cerrar un deadline, retira los exit_item no consumidos de todos los robots
+ * y limpia estado local. */
++!abolish_all_exit_items(Kind) <-
+    .findall(e(CId, Loc, W, V, Type),
+             pending_exit(CId, Loc, W, V, Type, Kind),
+             Pend);
+    !abolish_on_robots(Pend, Kind);
+    .abolish(pending_exit(_, _, _, _, _, Kind));
+    .abolish(claimed(_)).
 
-+!dispatch_next_unstorable(Group) :
-        unstorable_pending(Group, [CId | Rest]) <-
-    -+unstorable_pending(Group, Rest);
-    .print("Scheduler: mando ", CId, " (unstorable grupo ", Group, ") directo a salida");
-    !dispatch_exit_direct(CId).
++!abolish_on_robots([], _).
++!abolish_on_robots([e(CId, Loc, W, V, Type) | Rest], Kind) <-
+    .broadcast(untell, exit_item(CId, Loc, W, V, Type, Kind));
+    !abolish_on_robots(Rest, Kind).
 
-+!dispatch_next_unstorable(Group) <-
-    !finish_exit_cycle(Group).
+/* ---------------------------------------------------------------------------
+ *  CLAIM: un robot pide permiso para llevarse CId (fuente = el propio robot)
+ * ------------------------------------------------------------------------- */
++!claim_exit(CId, Requester)[source(Requester)] :
+        pending_exit(CId, _, _, _, _, _) & not claimed(CId) <-
+    +claimed(CId);
+    .print("Scheduler: claim GRANTED ", CId, " → ", Requester);
+    .send(Requester, tell, claim_result(CId, granted));
+    .broadcast(tell, exit_taken(CId)).
 
-+!dispatch_exit_direct(CId) :
-        package_info(CId, Weight, V, Type) <-
-    !pick_exit_robot(Weight, V, Target);
-    .print("Scheduler: exit_direct_order ", CId, " → ", Target);
-    .send(Target, tell, exit_direct_order(CId, Weight, V, Type)).
++!claim_exit(CId, Requester)[source(Requester)] <-
+    .print("Scheduler: claim DENIED ", CId, " → ", Requester);
+    .send(Requester, tell, claim_result(CId, denied)).
 
-+!dispatch_exit_direct(CId) <-
-    // Sin info cacheada: asumimos peor caso → heavy, tipo unknown
-    .print("Scheduler: exit_direct_order ", CId, " (sin info) → robot_heavy");
-    .send(robot_heavy, tell, exit_direct_order(CId, 0, 0, unknown)).
+/* Robot completa — avisa a transport, cuenta y limpia unstorable si aplica */
++exit_done(CId, Type)[source(Reporter)] <-
+    -exit_done(CId, Type)[source(Reporter)];
+    .send(transport, tell, container_shipped(CId, Type));
+    !remove_from_unstorable(CId);
+    !bump_shipped_count;
+    -pending_exit(CId, _, _, _, _, _);
+    -claimed(CId);
+    .broadcast(untell, exit_taken(CId)).
 
-/* Cada vez que un paquete sale efectivamente del almacén avanzamos el ciclo.
- * El entorno emite container_exited(CId, Type, W, V) al drop_at_exit. */
-+container_exited(CId, Type, Weight, V) :
-        type_group(Type, Group) & exit_phase(Group, stored_phase) <-
-    .print("Scheduler: ", CId, " (", Type, ") salió — pido siguiente stored del grupo ", Group);
-    .abolish(package_info(CId, _, _, _));
-    -container_exited(CId, Type, Weight, V);
-    .send(supervisor, achieve, request_exit_candidate(Group)).
++!bump_shipped_count : active_deadline(K) & deadline_shipped_count(K, N) <-
+    -+deadline_shipped_count(K, N + 1).
++!bump_shipped_count.
 
-+container_exited(CId, Type, Weight, V) :
-        type_group(Type, Group) & exit_phase(Group, unstorable_phase) <-
-    .print("Scheduler: ", CId, " (", Type, ") salió — siguiente unstorable del grupo ", Group);
-    .abolish(package_info(CId, _, _, _));
-    -container_exited(CId, Type, Weight, V);
-    !dispatch_next_unstorable(Group).
++!remove_from_unstorable(CId) <-
+    .findall(gl(G, L), unstorable_pending(G, L), GLs);
+    !remove_cid_from_groups(GLs, CId).
 
-/* Fallback: container_exited fuera de ciclo (no debería pasar, pero por
- * seguridad limpiamos la caché). */
++!remove_cid_from_groups([], _).
++!remove_cid_from_groups([gl(G, L) | Rest], CId) :
+        .member(CId, L) <-
+    .delete(CId, L, NewL);
+    -+unstorable_pending(G, NewL);
+    !remove_cid_from_groups(Rest, CId).
++!remove_cid_from_groups([_ | Rest], CId) <-
+    !remove_cid_from_groups(Rest, CId).
+
+/* Cuando el env emite container_exited sólo lo usamos para limpiar la caché
+ * local (package_info). El progreso del ciclo está marcado por exit_done. */
 +container_exited(CId, Type, Weight, V) <-
-    .print("Scheduler: ", CId, " (", Type, ") salió del almacén (fuera de ciclo)");
     .abolish(package_info(CId, _, _, _));
     -container_exited(CId, Type, Weight, V).
 
-/* -------- FIN DEL CICLO: desbloquea grupo y generación de sus tipos -------- */
+/* ---------------------------------------------------------------------------
+ *  FIN DEL CICLO — reanuda generación + flush de pending_announce
+ * ------------------------------------------------------------------------- */
++!end_exit_cycle <-
+    -exit_cycle_active;
+    -trigger_group(_);
+    .abolish(unstorable_pending(_, _));
+    !unblock_all_types;
+    .send(supervisor, tell, exit_cycle_ended);
+    .print("Scheduler: FIN ciclo de salida — reanudo generación normal");
+    !flush_all_pending_announce.
 
-+!finish_exit_cycle(Group) :
-        group_types(Group, Types) <-
-    -blocked_group(Group);
-    -exit_phase(Group, _);
-    !unblock_all_generation(Types);
-    .send(supervisor, tell, exit_cycle_done(Group));
-    .print("Scheduler: FIN ciclo salida grupo ", Group, " — reanudo generación de ", Types);
-    !flush_pending_group(Types).
++!flush_all_pending_announce <-
+    .findall(p(C, W, H, Wt, Ty), pending_announce(C, W, H, Wt, Ty), All);
+    !replay_pending_list(All).
 
-+!flush_pending_group([]).
-+!flush_pending_group([T | Rest]) <-
-    !flush_pending(T);
-    !flush_pending_group(Rest).
-
-+!flush_pending(Type) <-
-    .findall(p(C, W, H, Wt), pending_announce(C, W, H, Wt, Type), Pend);
-    !replay_pending(Type, Pend).
-
-+!replay_pending(_, []).
-+!replay_pending(Type, [p(C, W, H, Wt) | Rest]) <-
-    -pending_announce(C, W, H, Wt, Type);
-    !announce_if_allowed(C, W, H, Wt, Type);
-    !replay_pending(Type, Rest).
++!replay_pending_list([]).
++!replay_pending_list([p(C, W, H, Wt, Ty) | Rest]) <-
+    -pending_announce(C, W, H, Wt, Ty);
+    !announce_if_allowed(C, W, H, Wt, Ty);
+    !replay_pending_list(Rest).

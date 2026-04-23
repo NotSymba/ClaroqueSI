@@ -15,10 +15,13 @@
 //      la añade a la lista negra y prueba otra.
 //   5. Al acabar notifica `guardado` al scheduler.
 //
-// Ciclo de salida (exit_order):
-//   El scheduler pide desalojar un paquete concreto de una shelf
-//   al saturarse el tipo. El robot que pueda cargarlo lo retrieve
-//   y lo deposita en una celda libre de la zona de salida.
+// Ciclo de salida (exit_item + claim):
+//   El scheduler publica a todos los robots exit_item(CId, Loc,
+//   W, V, Type, Kind) durante un deadline. Cada robot escoge
+//   autónomamente el más cercano que pueda cargar y pide claim
+//   al scheduler antes de retirarlo. Al conceder, ejecuta la
+//   salida (retrieve desde shelf o pickup desde entrada) y
+//   deposita en una celda libre de la zona de salida.
 // ═════════════════════════════════════════════════════════════
  
 
@@ -93,7 +96,7 @@ exit_cell(2,0). exit_cell(2,1).
     !check_idle.
 
 // Si estoy en plena salida, encolo pero no avanzo cola: se reanudará
-// al terminar exit (ver do_exit / do_exit_direct).
+// al terminar el exit en curso (ver execute_exit).
 +!check_idle : exit_in_progress(_) <- true.
 +!check_idle : state(idle) <- !process_next.
 +!check_idle : state(going_idle) <-
@@ -104,30 +107,16 @@ exit_cell(2,0). exit_cell(2,1).
 
 // ─────────────────────────────────────────────────────────────
 //  PROCESAR COLA
-//  Prioridad: exit_order pendiente > exit_direct_order pendiente >
-//             cola normal > ir a idle.
+//  Prioridad: 1) exit_item del deadline activo (autónomo, vía claim)
+//             2) cola normal de contenedores
+//             3) ir a idle
 // ─────────────────────────────────────────────────────────────
 +!process_next : exit_in_progress(_) <- true.
 
 +!process_next :
     state(idle) &
-    exit_order(CId, Shelf, Weight, V, Type)[source(scheduler)] &
-    can_i_manage_weight(Weight) <-
-    -exit_order(CId, Shelf, Weight, V, Type)[source(scheduler)];
-    +exit_in_progress(CId);
-    -+state(busy);
-    .print("Retomo exit_order pendiente ", CId);
-    !do_exit(CId, Shelf).
-
-+!process_next :
-    state(idle) &
-    exit_direct_order(CId, Weight, V, Type)[source(scheduler)] &
-    can_i_manage_weight(Weight) <-
-    -exit_direct_order(CId, Weight, V, Type)[source(scheduler)];
-    +exit_in_progress(CId);
-    -+state(busy);
-    .print("Retomo exit_direct_order pendiente ", CId);
-    !do_exit_direct(CId).
+    exit_item(_, _, _, _, _, _) <-
+    !try_exit_or_fallback.
 
 +!process_next : container_queue([]) <- !go_idle.
 
@@ -177,19 +166,32 @@ exit_cell(2,0). exit_cell(2,1).
     }.
 
 // Pregunta bloqueante al scheduler: ¿qué shelf usar para este CId?
+// Espera SIEMPRE hasta obtener respuesta — nunca marca unstorable por timeout.
+// Si hay timeout, reenvía la petición y sigue esperando.
 +!ask_shelf_suggestion(CId, Type, Shelf) <-
     .my_name(Me);
     see;
     ?at(Me, RX, RY);
     .abolish(shelf_suggestion(CId, _));
     .send(scheduler, achieve, suggest_shelf(CId, Type, RX, RY, Me));
-    .wait({+shelf_suggestion(CId, _)}, 3000, _);
+    !wait_shelf_response(CId, Type, Shelf).
+
++!wait_shelf_response(CId, _, Shelf) : shelf_suggestion(CId, S) <-
+    Shelf = S;
+    .abolish(shelf_suggestion(CId, _)).
+
++!wait_shelf_response(CId, Type, Shelf) <-
+    .wait({+shelf_suggestion(CId, _)}, 15000, _);
     if (shelf_suggestion(CId, S)) {
         Shelf = S;
-        .abolish(shelf_suggestion(CId, _));
+        .abolish(shelf_suggestion(CId, _))
     } else {
-        .print("Timeout esperando shelf_suggestion de ", CId);
-        Shelf = none
+        .print("Timeout esperando shelf_suggestion de ", CId, ", reenvío petición...");
+        .my_name(Me);
+        see;
+        ?at(Me, RX, RY);
+        .send(scheduler, achieve, suggest_shelf(CId, Type, RX, RY, Me));
+        !wait_shelf_response(CId, Type, Shelf)
     }.
 
 // ─────────────────────────────────────────────────────────────
@@ -335,101 +337,165 @@ exit_cell(2,0). exit_cell(2,1).
     -+state(idle).
 
 // ═════════════════════════════════════════════════════════════
-//  CICLO DE SALIDA (exit_order del scheduler)
-//  El scheduler envía exit_order(CId, Shelf, Weight, V, Type) a
-//  varios robots; el primero que pueda cargarlo y esté libre lo
-//  ejecuta. Los demás lo descartan.
+//  CICLO DE SALIDA POR DEADLINES  (nuevo protocolo, autónomo)
+//
+//  El scheduler publica a los 4 robots:
+//    tell exit_item(CId, Loc, W, V, Type, Kind)
+//  donde Loc = at_shelf(S) | at_entry(X,Y) y Kind = short | long.
+//
+//  Los robots deciden autónomamente qué contenedor coger (el más
+//  cercano que puedan cargar) y lo reclaman al scheduler:
+//    achieve claim_exit(CId, Me)  →  claim_result(CId, granted|denied)
+//
+//  Al conceder, el scheduler broadcasts exit_taken(CId); los demás
+//  robots abolishen su copia local. El que tiene granted ejecuta la
+//  salida (retrieve desde shelf o pickup desde entrada + drop_at_exit)
+//  y notifica al scheduler con tell exit_done(CId, Type).
 // ═════════════════════════════════════════════════════════════
-+exit_order(CId, Shelf, Weight, V, Type)[source(scheduler)] :
-        can_i_manage_weight(Weight) & not exit_in_progress(_) &
-        (state(idle) | state(going_idle)) <-
-    +exit_in_progress(CId);
-    .drop_intention(go_idle);
-    -+state(busy);
-    .print("Acepto exit_order para ", CId, " desde ", Shelf);
-    !do_exit(CId, Shelf);
-    -exit_order(CId, Shelf, Weight, V, Type)[source(scheduler)].
 
-// Puedo cargarlo pero estoy ocupado → dejo el belief como "pendiente".
-// process_next lo recogerá como prioritario cuando vuelva a idle.
-+exit_order(CId, _, Weight, _, _)[source(scheduler)] :
-        can_i_manage_weight(Weight) <-
-    .print("exit_order ", CId, " pendiente (robot ocupado)").
-
-// No puedo con el peso → aviso al scheduler para que retire.
-+exit_order(CId, Shelf, Weight, V, Type)[source(scheduler)] <-
-    .print("No puedo con exit_order ", CId, " (peso=", Weight, ")");
-    -exit_order(CId, Shelf, Weight, V, Type)[source(scheduler)];
-    .send(scheduler, tell, exit_reject(CId, Shelf, Weight, V, Type)).
-
-// Regla auxiliar: ¿puedo cargar este peso? (las dimensiones del paquete
-// almacenado son desconocidas aquí, confiamos en el scheduler y en que
-// el entorno rechazará si hay error).
+// Regla auxiliar: ¿puedo cargar este peso?
 can_i_manage_weight(Weight) :-
     max_weight(MaxW) & Weight <= MaxW.
 
-+!do_exit(CId, Shelf) <-
-    !navigate_to_shelf(Shelf);
-    retrieve(CId);
-    !go_to_exit_cell(ExitX, ExitY);
-    drop_at_exit(ExitX, ExitY);
-    .print("Exit completo para ", CId);
-    -exit_in_progress(_);
-    -+state(idle);
-    !process_next.
+// ─── Recepción de un exit_item ──────────────────────────────
+// Si lo puedo cargar, intento avanzar. Si no, me quedo con la
+// creencia por si el scheduler luego la retira vía exit_taken.
++exit_item(CId, _, W, _, Type, Kind)[source(scheduler)] :
+        can_i_manage_weight(W) <-
+    .print("Recibido exit_item ", CId, " (tipo ", Type, ", ", Kind, ")");
+    !check_idle.
 
--!do_exit(CId, _) <-
-    .print("Fallo el exit de ", CId);
-    -exit_in_progress(_);
-    -+state(idle);
-    !process_next.
++exit_item(_, _, _, _, _, _)[source(scheduler)] <- true.
 
-// ─────────────────────────────────────────────────────────────
-//  SALIDA DIRECTA (paquetes unstorable que están en zona de entrada)
-//  El scheduler los manda al exit sin pasar por shelf. El robot los
-//  recoge de la zona de entrada igual que un pickup normal y los
-//  deposita en una celda de salida libre.
-// ─────────────────────────────────────────────────────────────
-+exit_direct_order(CId, Weight, V, Type)[source(scheduler)] :
-        can_i_manage_weight(Weight) & not exit_in_progress(_) &
-        (state(idle) | state(going_idle)) <-
-    +exit_in_progress(CId);
-    .drop_intention(go_idle);
-    -+state(busy);
-    .print("Acepto exit_direct_order de ", CId, " (tipo ", Type, ")");
-    !do_exit_direct(CId);
-    -exit_direct_order(CId, Weight, V, Type)[source(scheduler)].
+// El scheduler confirma que CId ya tiene dueño → lo descarto localmente
++exit_taken(CId)[source(scheduler)] <-
+    .abolish(exit_item(CId, _, _, _, _, _));
+    -exit_taken(CId)[source(scheduler)].
 
-// Ocupado → queda pendiente
-+exit_direct_order(CId, Weight, _, _)[source(scheduler)] :
-        can_i_manage_weight(Weight) <-
-    .print("exit_direct_order ", CId, " pendiente (robot ocupado)").
+// Inicio/fin de deadline: sólo informativo + intento de despertar
++active_deadline(Kind)[source(scheduler)] <-
+    .print("Robot: deadline activo ", Kind);
+    !check_idle.
 
-+exit_direct_order(CId, Weight, V, Type)[source(scheduler)] <-
-    .print("No puedo con exit_direct_order ", CId, " (peso=", Weight, ")");
-    -exit_direct_order(CId, Weight, V, Type)[source(scheduler)];
-    .send(scheduler, tell, exit_reject(CId, none, Weight, V, Type)).
+-active_deadline(Kind)[source(scheduler)] <-
+    .print("Robot: deadline ", Kind, " cerrado").
 
-+!do_exit_direct(CId) <-
-    !query_location(CId, CX, CY);
-    if (CX == none) {
-        .print("exit_direct: sin ubicación para ", CId);
-        -exit_in_progress(_);
-        -+state(idle);
-        !process_next
+// ─── Selección del mejor exit_item + lock atómico ───────────
+//  Mejor = más cercano entre los que puedo cargar (Manhattan).
+//
+//  La elección + adquisición de lock (+exit_in_progress) + envío
+//  del claim se hace dentro de un plan @atomic para que dos
+//  eventos +exit_item concurrentes no hagan que este robot
+//  arranque dos exits a la vez (era la causa del "teletransporte":
+//  dos intenciones navegando al mismo tiempo hacia shelves distintas).
+//
+//  La respuesta del scheduler (claim_result) llega como EVENTO
+//  (no con .wait) para que el robot no se quede bloqueado y para
+//  que los cuatro robots progresen en paralelo.
+@try_exit_atomic[atomic]
++!try_exit_or_fallback : not exit_in_progress(_) <-
+    !pick_best_exit_item(Best);
+    if (Best == none) {
+        !fallback_to_normal
     } else {
-        !goto_pos(CId, CX, CY);
-        pickup(CId);
-        !go_to_exit_cell(EX, EY);
-        drop_at_exit(EX, EY);
-        .print("exit_direct completado para ", CId);
-        -exit_in_progress(_);
-        -+state(idle);
-        !process_next
+        Best = ex(CId, Loc, _, _, Type, _);
+        .print("Elijo exit_item ", CId, " (", Loc, "), pido claim");
+        +exit_in_progress(CId);
+        +pending_claim(CId, Loc, Type);
+        -+state(busy);
+        .drop_intention(go_idle);
+        .my_name(Me);
+        .abolish(claim_result(CId, _));
+        .send(scheduler, achieve, claim_exit(CId, Me))
     }.
 
--!do_exit_direct(CId) <-
-    .print("Fallo el exit_direct de ", CId);
++!try_exit_or_fallback <- true.
+
++!fallback_to_normal : container_queue([]) <- !go_idle.
++!fallback_to_normal :
+        container_queue([pkg(CId, Weight, W, H, Type) | Rest]) <-
+    -+container_queue(Rest);
+    -state(idle);
+    +state(busy);
+    !handle_container(CId, Weight, W, H, Type).
+
++!pick_best_exit_item(Best) <-
+    .my_name(Me);
+    see;
+    ?at(Me, RX, RY);
+    .findall(ex(CId, Loc, W, V, Type, Kind),
+             (exit_item(CId, Loc, W, V, Type, Kind) & can_i_manage_weight(W)),
+             Cands);
+    !pick_closest_exit(Cands, RX, RY, none, 999999, Best).
+
++!pick_closest_exit([], _, _, Best, _, Best).
++!pick_closest_exit([ex(CId, Loc, W, V, Type, Kind) | Rest], RX, RY, Cur, MinD, Best) <-
+    !dist_to_loc(Loc, RX, RY, D);
+    if (D < MinD) {
+        !pick_closest_exit(Rest, RX, RY, ex(CId, Loc, W, V, Type, Kind), D, Best)
+    } else {
+        !pick_closest_exit(Rest, RX, RY, Cur, MinD, Best)
+    }.
+
++!dist_to_loc(at_shelf(S), RX, RY, D) :
+        shelf_location(S, SX, SY) <-
+    D = math.abs(SX - RX) + math.abs(SY - RY).
++!dist_to_loc(at_entry(X, Y), RX, RY, D) <-
+    D = math.abs(X - RX) + math.abs(Y - RY).
+
+// ─── Respuesta del claim (event-driven, no .wait) ───────────
+//  Con pending_claim(CId, Loc, Type) guardamos los datos que
+//  necesita execute_exit cuando finalmente llega la respuesta.
++claim_result(CId, granted)[source(scheduler)] :
+        pending_claim(CId, Loc, Type) <-
+    -claim_result(CId, granted)[source(scheduler)];
+    -pending_claim(CId, Loc, Type);
+    !execute_exit(CId, Loc, Type).
+
++claim_result(CId, denied)[source(scheduler)] :
+        pending_claim(CId, _, _) <-
+    .print("Claim denegado para ", CId, " — libero y reintento");
+    -claim_result(CId, denied)[source(scheduler)];
+    .abolish(pending_claim(CId, _, _));
+    .abolish(exit_item(CId, _, _, _, _, _));
+    -exit_in_progress(_);
+    -+state(idle);
+    !process_next.
+
+// Cualquier claim_result stale: limpiamos y ya.
++claim_result(_, _)[source(scheduler)] <-
+    .abolish(claim_result(_, _)[source(scheduler)]).
+
++!execute_exit(CId, at_shelf(Shelf), Type) <-
+    .print("Exit de ", CId, " desde shelf ", Shelf);
+    !navigate_to_shelf(Shelf);
+    retrieve(CId);
+    !go_to_exit_cell(EX, EY);
+    drop_at_exit(EX, EY);
+    .send(scheduler, tell, exit_done(CId, Type));
+    .abolish(exit_item(CId, _, _, _, _, _));
+    -exit_in_progress(_);
+    -+state(idle);
+    .print("Exit completo: ", CId);
+    !process_next.
+
++!execute_exit(CId, at_entry(X, Y), Type) <-
+    .print("Exit directo de ", CId, " desde entrada (", X, ",", Y, ")");
+    !goto_pos(CId, X, Y);
+    pickup(CId);
+    !go_to_exit_cell(EX, EY);
+    drop_at_exit(EX, EY);
+    .send(scheduler, tell, exit_done(CId, Type));
+    .abolish(exit_item(CId, _, _, _, _, _));
+    -exit_in_progress(_);
+    -+state(idle);
+    .print("Exit directo completo: ", CId);
+    !process_next.
+
+-!execute_exit(CId, _, Type) <-
+    .print("Fallo el exit de ", CId);
+    .send(scheduler, tell, exit_done(CId, Type));
+    .abolish(exit_item(CId, _, _, _, _, _));
     -exit_in_progress(_);
     -+state(idle);
     !process_next.
