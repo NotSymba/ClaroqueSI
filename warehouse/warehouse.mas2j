@@ -24,12 +24,15 @@ MAS warehouse {
         robot_heavy2 [beliefs= "at(robot_heavy2, 6 , 3)", beliefs="speed(1)",
                      beliefs="robot_type(heavy)", beliefs="max_weight(100)",
                      beliefs="max_size(2,3)", beliefs="state(idle)"];
-
+ 
         // Agente planificador/scheduler
         scheduler;
-        
+
         // Agente supervisor de errores y monitorización
         supervisor;
+
+        // Agente externo que simula el transporte/camión en los deadlines de salida
+        transport;
 
     aslSourcePath: "src/agt";
 }

@@ -1,0 +1,55 @@
+* [33m516a866[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mv2[m[33m)[m estoy haciendo la salida, actualmente no es funcional y rompi un poco de la logica de entrada corregire mas adelante
+* [33m4e44c2e[m[33m ([m[1;31morigin/v2[m[33m)[m  eliminada la logica repetida de los agentes a un nuevo archivo work.asl
+* [33m3ef16cf[m creada accion del entorno retrieve para recoger un paquete , util para mas tarde
+* [33m6f7a3c7[m  si arregle el path finding a veces hace cosas raras pero, es cosa del algoritmo, en otra iteracion intentare hacer que los robots puedan ver mas casillas a su alrededor para que sea mas inteligente, porque a veces los robots para destrabarce hacen unos movimientos raros, pero es lo que hay, esto no es A* esto es masoquismo*
+* [33mf3fb727[m ahora el pathfinding va peor, pero es porque estoy cambiando cosas pero no me da mas la cabeza por hoy
+* [33mb500f98[m bug fix
+* [33mfa29769[m quitar configuracion local, me deje archivos de configuracion local que quito con este commit
+* [33m559a324[m varios cambios tengo cosas pendientes: intente hacer una recolocacion que no funciona del todo bien... los robots ahora solo entregan en su linea de shelf, lo cambiare mas tarde para que puedan entregar en todas pero que prioricen las suyas los urgentes solo se entregan en los shelf 1 5 8 habra que preguntar por esto movi un monton de cosas seguro me quedaron bugs por todos lados pero seguire puliendo esto
+* [33m77099c7[m cambios al entorno
+* [33mf4bed87[m[33m ([m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m, [m[1;32mswitch[m[33m, [m[1;32mmain[m[33m)[m cambio de optimizacion ahora ya no se saturan los agentes con un monton de persepcion newContainer
+* [33m09aa762[m no me acuerdo que modifique pero algo hice
+* [33mcfe899f[m menos bugs mejor entorno, menos salud mental
+* [33mc4e4042[m[33m ([m[1;31morigin/Agentes[m[33m)[m Codigo actualizado con supervisor
+* [33mb99b7be[m Scheduler con velocidades en cuenta
+* [33md6c2f59[m coherencia++
+* [33m155df7a[m modifique lo que hablamos hoy y quite la funcion rara de los agentes, tambien de los agentes quite go_to(entrance) y ahora van a los paquetes porque ahora los paquetes se generan en distintas pos, le di otra iteracion al pathfiding y corregi cosas que no me gustaban
+* [33m9807851[m Error de librerias llenas
+*   [33m28421da[m Merge pull request #8 from NotSymba/Agentes
+[32m|[m[33m\[m  
+[32m|[m * [33mc22d8b1[m merge manual 1
+* [33m|[m [33m8103f13[m Merge pull request #7 from NotSymba/Agentes
+[34m|[m[33m\[m[33m|[m 
+[34m|[m * [33mc4e56f8[m Modificacion de todos los agentes con funciones del entorno
+[34m|[m * [33m5e439a0[m Scheduler corregido
+[34m|[m * [33m6af0871[m Implementacion scheduler listas
+[34m|[m * [33mdb8a05c[m Agentes basico
+* [35m|[m   [33m92a5d16[m Merge pull request #5 from NotSymba/revert-3-refactorBrutal
+[36m|[m[1;31m\[m [35m\[m  
+[36m|[m * [35m|[m [33m46cb957[m Revert "Refactor brutal"
+[36m|[m[36m/[m [35m/[m  
+* [35m|[m   [33m9e31ef7[m Merge pull request #3 from NotSymba/refactorBrutal
+[35m|[m[1;33m\[m [35m\[m  
+[35m|[m [1;33m|[m[35m/[m  
+[35m|[m[35m/[m[1;33m|[m   
+[35m|[m * [33mced8b9e[m[33m ([m[1;31morigin/refactorBrutal[m[33m)[m bugs corregidos que vi cuando documentaba
+[35m|[m * [33m1fa97a6[m ahora se tienen en cuenta en la gestion temporal a los robots que estan detenido
+[35m|[m * [33ma673bff[m Docunentando vi bugs
+[35m|[m * [33m5c075c4[m rezo por no tocar nunca mas el mov
+[35m|[m[35m/[m  
+*   [33mc64431e[m Merge pull request #2 from NotSymba/refactorBrutal
+[1;34m|[m[1;35m\[m  
+[1;34m|[m * [33ma71fe19[m refactor mini para facilitar la vida
+* [1;35m|[m [33m66b4509[m Merge pull request #1 from NotSymba/refactorBrutal
+[1;36m|[m[1;35m\[m[1;35m|[m 
+[1;36m|[m * [33m5e8f9ec[m rezo porque ahora si
+[1;36m|[m * [33mc752a60[m vuelta atras porque rompi mas cosas de las que queria
+[1;36m|[m * [33m5895f9d[m correg i los bugs que se dejo el tontito del tapir del pasado jijijaja ademas hice un refactor pequeño a un par de funciones por lejibilidad
+[1;36m|[m * [33m14c4650[m corregi dropContainer, para que se pueda dropear la caja si el robot esta adyacente a la estanteria y no a 2 casillas de distancia del origen
+[1;36m|[m * [33m416502b[m hice algunas funciones de generacion random de contenedores para probar mas tarde y depurar, hice una generacion de contenedores 'justa' que no se si la podemos dejar pero nos sirve para testeos
+[1;36m|[m * [33maf25cde[m movimiento ahora funciona como deberia, cree un par de funciones en el modelo para eso... ademas quite los zone.identifier que se generan al copiar y pegar
+[1;36m|[m * [33m003353b[m Refactorice desacoplando el entorno(controlador) que se encuentra en warehouseArtifact de la logica de negocio creando una nueva clase WarehouseModelo... igual quedaron bugs sueltos que mirare
+[1;36m|[m[1;36m/[m  
+* [33m491d5a6[m Supoño q estara ben
+* [33m274a25c[m Segunda prueba
+* [33ma58c9cb[m Primera prueba

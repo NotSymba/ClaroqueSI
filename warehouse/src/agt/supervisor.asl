@@ -77,10 +77,19 @@ shelf_accepts(fragile,  shelf_9).
 /* Umbral "casi lleno" (marca una shelf individual como ocupada) */
 near_full_ratio(0.9).
 
-/* Umbral de saturación POR TIPO. Si la ocupación agregada (peso o volumen)
- * de las estanterías que admiten un tipo supera el 70%, se avisa al scheduler
- * con no_space(Type) para que dispare el proceso de salida. */
+/* Umbral de saturación POR GRUPO. standard y fragile comparten shelves y
+ * forman el grupo "normal"; urgent va aparte. Si la ocupación agregada (peso
+ * o volumen) de las shelves que admiten CUALQUIER tipo del grupo supera el
+ * 70 %, se avisa al scheduler con no_space(Type) para que dispare la salida
+ * (el scheduler mapea tipo→grupo). */
 type_full_ratio(0.7).
+
+type_group(standard, normal).
+type_group(fragile,  normal).
+type_group(urgent,   urgent).
+
+group_types(normal, [standard, fragile]).
+group_types(urgent, [urgent]).
 
 !start.
 
@@ -154,33 +163,48 @@ type_full_ratio(0.7).
 +!mark_full(_).
 
 /* ============================================================================
- * DETECCIÓN DE FALTA DE ESPACIO POR TIPO (70% agregado)
- *   Se suma peso/volumen usado y capacidad total de las estanterías que
- *   admiten Type; si alguna de las dos ratios ≥ 0.7, avisamos al scheduler
- *   con no_space(Type). Una sola vez mientras siga saturado.
+ * DETECCIÓN DE FALTA DE ESPACIO POR GRUPO (70% agregado)
+ *   Se suma peso/volumen usado y capacidad total de TODAS las shelves que
+ *   admiten cualquier tipo del grupo; si alguna de las dos ratios ≥ 0.7,
+ *   avisamos al scheduler con no_space(Type). Una sola vez por grupo
+ *   mientras siga saturado (blocked_group_notified).
  * ============================================================================ */
 
-+!check_type_space(Type) : blocked_type_notified(Type) <- true.
++!check_type_space(Type) :
+        type_group(Type, Group) & blocked_group_notified(Group) <- true.
 
 +!check_type_space(Type) :
-        type_full_ratio(R) <-
-    !sum_type_usage(Type, UW, UV, MW, MV);
+        type_group(Type, Group) & type_full_ratio(R) <-
+    !sum_group_usage(Group, UW, UV, MW, MV);
     if (MW > 0 & (UW >= MW * R | UV >= MV * R)) {
-        +blocked_type_notified(Type);
-        .print("Supervisor: tipo ", Type, " al ", UW, "/", MW, "kg (", UV, "/", MV, "u³) ≥ ",
-               R*100, "% — avisando scheduler");
+        +blocked_group_notified(Group);
+        .print("Supervisor: grupo ", Group, " al ", UW, "/", MW, "kg (", UV, "/", MV, "u³) ≥ ",
+               R*100, "% — avisando scheduler con no_space(", Type, ")");
         .send(scheduler, tell, no_space(Type))
     }.
 
-+!sum_type_usage(Type, UW, UV, MW, MV) <-
+/* Suma sobre las shelves que admiten al menos un tipo del grupo. Cada shelf
+ * cuenta una sola vez aunque admita varios tipos del grupo. */
++!sum_group_usage(Group, UW, UV, MW, MV) <-
+    .findall(S,
+             (group_types(Group, Types) & .member(T, Types) &
+              shelf_accepts(T, S)),
+             RawShelves);
+    !dedup(RawShelves, Shelves);
     .findall(used(W, V),
-             (shelf_accepts(Type, S) & shelf_usage(S, W, V)),
+             (.member(S, Shelves) & shelf_usage(S, W, V)),
              UL);
     .findall(cap(MaxW, MaxV),
-             (shelf_accepts(Type, S) & shelf_capacity(S, MaxW, MaxV)),
+             (.member(S, Shelves) & shelf_capacity(S, MaxW, MaxV)),
              CL);
     !sum_uv(UL, 0, 0, UW, UV);
     !sum_mv(CL, 0, 0, MW, MV).
+
++!dedup([], []).
++!dedup([X | Rest], Out) : .member(X, Rest) <-
+    !dedup(Rest, Out).
++!dedup([X | Rest], [X | Out]) <-
+    !dedup(Rest, Out).
 
 +!sum_uv([], AW, AV, AW, AV).
 +!sum_uv([used(W, V) | Rest], AW, AV, UW, UV) <-
@@ -229,25 +253,64 @@ type_full_ratio(0.7).
 
 +!maybe_unmark(_, _, _, _, _).
 
-/* El scheduler avisa al terminar el proceso de salida de un tipo para que
+/* El scheduler avisa al terminar el proceso de salida de un GRUPO para que
  * el supervisor vuelva a poder generar aviso de no_space más adelante. */
-+exit_cycle_done(Type)[source(scheduler)] <-
-    -blocked_type_notified(Type);
-    .print("Supervisor: ciclo de salida del tipo ", Type, " completado");
-    -exit_cycle_done(Type)[source(scheduler)].
++exit_cycle_done(Group)[source(scheduler)] <-
+    -blocked_group_notified(Group);
+    .print("Supervisor: ciclo de salida del grupo ", Group, " completado");
+    -exit_cycle_done(Group)[source(scheduler)].
+
+/* ============================================================================
+ * SELECCIÓN DE SHELF PARA GUARDAR (protocolo con scheduler)
+ *
+ *   El scheduler construye una lista de shelves ordenada por la prioridad
+ *   del robot y nos la manda; aquí recorremos IN ORDER y contestamos al robot
+ *   (Requester) con la primera que tiene capacidad real (no shelf_full_marked
+ *   y, si tenemos peso/volumen, UW+Weight ≤ MaxW y UV+V ≤ MaxV).
+ *
+ *   Si la lista se agota sin encontrar nada libre, respondemos none.
+ * ============================================================================ */
+
++!pick_first_free(CId, _, _, [], Requester)[source(scheduler)] <-
+    .print("Supervisor: sin shelf libre para ", CId, " → informo none a ", Requester);
+    .send(Requester, tell, shelf_suggestion(CId, none)).
+
+/* Shelf marcada llena por near_full_ratio → saltamos */
++!pick_first_free(CId, Weight, V, [S | Rest], Requester)[source(scheduler)] :
+        shelf_full_marked(S) <-
+    !pick_first_free(CId, Weight, V, Rest, Requester).
+
+/* Sin peso/vol conocido → aceptamos si no está marcada llena */
++!pick_first_free(CId, 0, 0, [S | _], Requester)[source(scheduler)] <-
+    .print("Supervisor: shelf ", S, " para ", CId, " (sin peso/vol)");
+    .send(Requester, tell, shelf_suggestion(CId, S)).
+
+/* Con peso/vol: comprobamos que quepa nominalmente */
++!pick_first_free(CId, Weight, V, [S | _], Requester)[source(scheduler)] :
+        shelf_capacity(S, MaxW, MaxV) & shelf_usage(S, UW, UV) &
+        UW + Weight <= MaxW & UV + V <= MaxV <-
+    .print("Supervisor: shelf ", S, " para ", CId, " — cabe (", UW+Weight, "/", MaxW, "kg, ",
+           UV+V, "/", MaxV, "u³)");
+    .send(Requester, tell, shelf_suggestion(CId, S)).
+
+/* No cabe → probamos la siguiente */
++!pick_first_free(CId, Weight, V, [_ | Rest], Requester)[source(scheduler)] <-
+    !pick_first_free(CId, Weight, V, Rest, Requester).
 
 /* ============================================================================
  * CANDIDATO DE DESALOJO (responde al scheduler en el ciclo de salida)
- *   Elige el primer paquete almacenado de ese tipo.
+ *   Elige el primer paquete almacenado de CUALQUIER tipo del grupo.
  * ============================================================================ */
 
-+!request_exit_candidate(Type)[source(scheduler)] :
-        stored_at(CId, Shelf, Type, Weight, Volume) <-
-    .send(scheduler, tell, exit_candidate(CId, Shelf, Weight, Volume, Type)).
++!request_exit_candidate(Group)[source(scheduler)] :
+        group_types(Group, Types) &
+        stored_at(CId, Shelf, Type, Weight, Volume) & .member(Type, Types) <-
+    .send(scheduler, tell,
+          exit_candidate(CId, Shelf, Weight, Volume, Type, Group)).
 
-+!request_exit_candidate(Type)[source(scheduler)] <-
-    .print("Supervisor: no hay stored_at para tipo ", Type, " — no puedo desalojar");
-    .send(scheduler, tell, exit_candidate(none, none, 0, 0, Type)).
++!request_exit_candidate(Group)[source(scheduler)] <-
+    .print("Supervisor: no hay stored_at para grupo ", Group, " — no puedo desalojar");
+    .send(scheduler, tell, exit_candidate(none, none, 0, 0, unknown, Group)).
 
 /* ============================================================================
  * ESTADÍSTICAS Y ESTADO DE ROBOTS

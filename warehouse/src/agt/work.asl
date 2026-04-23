@@ -20,6 +20,7 @@
 //   al saturarse el tipo. El robot que pueda cargarlo lo retrieve
 //   y lo deposita en una celda libre de la zona de salida.
 // ═════════════════════════════════════════════════════════════
+ 
 
 state(idle).
 container_queue([]).
@@ -38,13 +39,21 @@ shelf_location(shelf_7, 16,  6).
 shelf_location(shelf_8, 10, 10).
 shelf_location(shelf_9, 14, 10).
 
-accepts(urgent,   shelf_1).
-accepts(urgent,   shelf_5).
-accepts(urgent,   shelf_8).
-accepts(standard, shelf_2). accepts(standard, shelf_3). accepts(standard, shelf_4).
-accepts(standard, shelf_6). accepts(standard, shelf_7). accepts(standard, shelf_9).
-accepts(fragile,  shelf_2). accepts(fragile,  shelf_3). accepts(fragile,  shelf_4).
-accepts(fragile,  shelf_6). accepts(fragile,  shelf_7). accepts(fragile,  shelf_9).
+// Clasificación del paquete: "regular" = standard ó fragile (comparten shelves);
+// los urgent van por su propio canal. Si aparece un tipo nuevo basta con añadir
+// un hecho regular_container/1 y funcionará todo (accepts, pick_shelf, …).
+regular_container(standard).
+regular_container(fragile).
+
+// Clasificación de las shelves:
+urgent_shelf(shelf_1).  urgent_shelf(shelf_5).  urgent_shelf(shelf_8).
+regular_shelf(shelf_2). regular_shelf(shelf_3). regular_shelf(shelf_4).
+regular_shelf(shelf_6). regular_shelf(shelf_7). regular_shelf(shelf_9).
+
+// Regla de aceptación: una shelf admite un paquete si ambos son del mismo
+// "canal" (urgent ↔ urgent_shelf, regular ↔ regular_shelf).
+accepts(urgent, S) :- urgent_shelf(S).
+accepts(Type,   S) :- regular_container(Type) & regular_shelf(S).
 
 // Celdas libres de la zona de salida (todas inicialmente).
 exit_cell(0,0). exit_cell(0,1). exit_cell(1,0). exit_cell(1,1).
