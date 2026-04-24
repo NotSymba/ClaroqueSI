@@ -7,8 +7,10 @@ max_size(1, 2).
 min_weight(10).
 min_size(1, 1).
 
-timePerMove(300).
+timePerMove(200).
 priority(2).
+
+robot_shelf_priority([shelf_6, shelf_7, shelf_2, shelf_3, shelf_4, shelf_9]).
 
 // Solo acepta lo que light NO puede llevar (peso > 10 o tamaño > 1x1)
 // pero que medium sí puede (peso <= 30 y tamaño <= 1x2)

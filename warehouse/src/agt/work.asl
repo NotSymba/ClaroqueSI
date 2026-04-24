@@ -61,6 +61,41 @@ accepts(Type,   S) :- regular_container(Type) & regular_shelf(S).
 // Celdas libres de la zona de salida (todas inicialmente).
 exit_cell(0,0). exit_cell(0,1). exit_cell(1,0). exit_cell(1,1).
 exit_cell(2,0). exit_cell(2,1).
+
+// ─────────────────────────────────────────────────────────────
+//  ESTADO COMPARTIDO DE ESTANTERÍAS (peer-to-peer, opción A)
+//
+//  Cada robot lleva su propia copia del estado de las estanterías:
+//    · shelf_capacity(Shelf, MaxW, MaxV)         — estático
+//    · shelf_usage_local(Shelf, CurW, CurV)      — depósitos confirmados
+//    · shelf_reservation(Shelf, Owner, W, V, CId) — pre-reservas activas
+//      de CUALQUIER robot (incluido él mismo), para paquetes en vuelo
+//
+//  Protocolo entre robots (peer_broadcast):
+//    · shelf_reserve(CId, Shelf, W, V)   antes del pickup
+//    · shelf_commit(CId, Shelf, W, V)    al hacer drop_at con éxito
+//    · shelf_release(CId, Shelf, W, V)   si el drop falló (blacklist)
+//    · shelf_retrieved(CId, Shelf, W, V) al retrieve en el ciclo de salida
+//
+//  La elección es LOCAL siguiendo robot_shelf_priority (urgentes por
+//  distancia). Se acepta la primera shelf donde usage+reservas+paquete
+//  cabe. Si ninguna cabe → el paquete se marca unstorable y NO se recoge.
+// ─────────────────────────────────────────────────────────────
+shelf_capacity(shelf_1, 50,  8).
+shelf_capacity(shelf_2, 50,  8).
+shelf_capacity(shelf_3, 50,  8).
+shelf_capacity(shelf_4, 50,  8).
+shelf_capacity(shelf_5, 100, 12).
+shelf_capacity(shelf_6, 100, 12).
+shelf_capacity(shelf_7, 100, 12).
+shelf_capacity(shelf_8, 200, 20).
+shelf_capacity(shelf_9, 200, 20).
+
+shelf_usage_local(shelf_1, 0, 0). shelf_usage_local(shelf_2, 0, 0).
+shelf_usage_local(shelf_3, 0, 0). shelf_usage_local(shelf_4, 0, 0).
+shelf_usage_local(shelf_5, 0, 0). shelf_usage_local(shelf_6, 0, 0).
+shelf_usage_local(shelf_7, 0, 0). shelf_usage_local(shelf_8, 0, 0).
+shelf_usage_local(shelf_9, 0, 0).
 // ─────────────────────────────────────────────────────────────
 //  ANUNCIO DE CONTENEDOR DISPONIBLE (desde scheduler)
 //  robot_heavy define is_router_robot y sobreescribe este plan con
@@ -77,6 +112,110 @@ exit_cell(2,0). exit_cell(2,1).
 
 +container_available(CId, W, H, Weight, Type) : not is_router_robot <-
     .abolish(container_available(CId, _, _, _, _)).
+
+// ─────────────────────────────────────────────────────────────
+//  COORDINACIÓN SIMÉTRICA HEAVY ↔ HEAVY2 (ambos is_router_robot)
+//
+//  El scheduler anuncia container_available a AMBOS heavy. Cada uno
+//  consulta al peer su estado y aplica la MISMA regla determinista:
+//    1) menos paquetes actualmente almacenados (my_stored) → gana
+//    2) empate: menor cola → gana
+//    3) empate: idle > going_idle > busy
+//    4) empate absoluto: robot_heavy gana (desempate por nombre)
+//  El perdedor simplemente descarta — no envía assign_here. Así un solo
+//  robot encola cada paquete, sin solapamientos ni mensajes extra.
+//
+//  Si el peer no responde en 2s (caso degenerado) nos lo quedamos para
+//  no perder el paquete.
+// ─────────────────────────────────────────────────────────────
++container_available(CId, W, H, Weight, Type) :
+        is_router_robot & can_i_manage(W, H, Weight) <-
+    !decide_heavy_peer(CId, W, H, Weight, Type);
+    .abolish(container_available(CId, _, _, _, _)).
+
++container_available(CId, _, _, _, _) : is_router_robot <-
+    .abolish(container_available(CId, _, _, _, _)).
+
++!decide_heavy_peer(CId, W, H, Weight, Type) :
+        container_queue(MyQ) & state(MyS) <-
+    .length(MyQ, MyL);
+    .findall(s(C, Sh), my_stored(C, Sh, _, _), SL);
+    .length(SL, MyN);
+    !heavy_peer_name(PeerName);
+    .my_name(Me);
+    .abolish(heavy_peer_info(_, _, _));
+    .print("decide_heavy_peer ", CId, " — mis stored=", MyN, ", cola=", MyL, ", estado=", MyS);
+    .send(PeerName, achieve, report_heavy_info(Me));
+    .wait({+heavy_peer_info(_, _, _)}, 2000, _);
+    if (heavy_peer_info(PeerN, PeerL, PeerS)) {
+        .abolish(heavy_peer_info(_, _, _));
+        .print("Peer ", PeerName, ": stored=", PeerN, ", cola=", PeerL, ", estado=", PeerS);
+        !route_symmetric(CId, W, H, Weight, Type, MyN, MyL, MyS, PeerN, PeerL, PeerS)
+    } else {
+        .print("Peer ", PeerName, " no responde — me quedo ", CId);
+        !enqueue(CId, W, H, Weight, Type)
+    }.
+
++!heavy_peer_name(robot_heavy2) : .my_name(robot_heavy).
++!heavy_peer_name(robot_heavy)  : .my_name(robot_heavy2).
+
++!report_heavy_info(Requester) :
+        container_queue(Q) & state(S) <-
+    .length(Q, L);
+    .findall(s(C, Sh), my_stored(C, Sh, _, _), SL);
+    .length(SL, N);
+    .send(Requester, tell, heavy_peer_info(N, L, S)).
+
+// Regla simétrica. Los dos heavy ejecutan esta misma cadena con los
+// valores Mi/Peer intercambiados; solo uno acaba en un plan que hace
+// enqueue, el otro cae en un plan "me toca descartar".
+//
+// (1) Menos almacenado gana
++!route_symmetric(CId, W, H, Weight, Type, MyN, _, _, PeerN, _, _) :
+        MyN < PeerN <-
+    .print("  Yo tengo menos almacenado (", MyN, " < ", PeerN, ") → me quedo ", CId);
+    !enqueue(CId, W, H, Weight, Type).
+
++!route_symmetric(CId, _, _, _, _, MyN, _, _, PeerN, _, _) :
+        MyN > PeerN <-
+    .print("  Peer tiene menos almacenado (", PeerN, " < ", MyN, ") — descarto ", CId).
+
+// (2) Empate almacenado — menos cola gana
++!route_symmetric(CId, W, H, Weight, Type, N, MyL, _, N, PeerL, _) :
+        MyL < PeerL <-
+    .print("  Empate stored, mi cola menor (", MyL, " < ", PeerL, ") → me quedo ", CId);
+    !enqueue(CId, W, H, Weight, Type).
+
++!route_symmetric(CId, _, _, _, _, N, MyL, _, N, PeerL, _) :
+        MyL > PeerL <-
+    .print("  Empate stored, peer cola menor — descarto ", CId).
+
+// (3) Empate N y L — idle gana sobre lo que no es idle
++!route_symmetric(CId, W, H, Weight, Type, N, L, idle, N, L, PeerS) :
+        PeerS \== idle <-
+    .print("  Empate N+L, yo idle → me quedo ", CId);
+    !enqueue(CId, W, H, Weight, Type).
+
++!route_symmetric(CId, _, _, _, _, N, L, MyS, N, L, idle) :
+        MyS \== idle <-
+    .print("  Empate N+L, peer idle — descarto ", CId).
+
+// (4) Empate N, L, ninguno idle — going_idle gana sobre busy
++!route_symmetric(CId, W, H, Weight, Type, N, L, going_idle, N, L, busy) <-
+    .print("  Empate, yo going_idle vs peer busy → me quedo ", CId);
+    !enqueue(CId, W, H, Weight, Type).
+
++!route_symmetric(CId, _, _, _, _, N, L, busy, N, L, going_idle) <-
+    .print("  Empate, peer going_idle — descarto ", CId).
+
+// (5) Empate absoluto (misma N, L, S) — robot_heavy gana por nombre
++!route_symmetric(CId, W, H, Weight, Type, N, L, S, N, L, S) :
+        .my_name(robot_heavy) <-
+    .print("  Empate absoluto — robot_heavy gana → me quedo ", CId);
+    !enqueue(CId, W, H, Weight, Type).
+
++!route_symmetric(CId, _, _, _, _, _, _, _, _, _, _) <-
+    .print("  Empate absoluto — robot_heavy se queda con ", CId, ", yo descarto").
 
 // ─────────────────────────────────────────────────────────────
 //  COLA DE CONTENEDORES
@@ -129,6 +268,10 @@ exit_cell(2,0). exit_cell(2,1).
 
 // ─────────────────────────────────────────────────────────────
 //  GESTIÓN DE UN CONTENEDOR
+//
+//  La elección de estantería la hace el propio robot mirando SU copia del
+//  estado (usage + reservas de todos los robots). Si nada cabe → unstorable
+//  SIN recogerlo. Si encuentra shelf → pre-reserva, broadcast, pickup, drop.
 // ─────────────────────────────────────────────────────────────
 +!handle_container(CId, Weight, W, H, Type) <-
     !query_location(CId, CX, CY);
@@ -137,61 +280,205 @@ exit_cell(2,0). exit_cell(2,1).
         -+state(idle);
         !process_next
     } else {
-        // ── 1) PEDIR SUGERENCIA AL SCHEDULER ANTES DE RECOGER ─────────
-        //    Si el scheduler dice que no hay shelf disponible, marcamos
-        //    el paquete como unstorable y NO lo recogemos.
-        !ask_shelf_suggestion(CId, Type, Suggested);
-        if (Suggested == none) {
-            .print("Scheduler dice sin shelf para ", CId, " (tipo ", Type, "). No lo recojo.");
-            .my_name(Me);
+        V = W * H;
+        !choose_shelf_local(CId, Type, Weight, V, Chosen);
+        if (Chosen == none) {
+            .print("Sin shelf con hueco (incluyendo reservas) para ", CId, " (", Type, ") — unstorable");
             .send(scheduler, tell, unstorable(CId, Type));
             -+state(idle);
             !process_next
         } else {
-            +suggested_shelf(CId, Suggested);
+            !reserve_shelf(CId, Chosen, Weight, V);
             !goto_pos(CId, CX, CY);
             pickup(CId);
-            !pick_shelf(CId, Weight, W, H, Type, TargetShelf);
-            if (TargetShelf == none) {
-                .print("Sin estantería disponible para ", CId, " tras pickup, reintento en 2s...");
-                .wait(2000);
-                !handle_container(CId, Weight, W, H, Type)
-            } else {
-                !navigate_to_shelf(TargetShelf);
-                !try_drop(CId, Weight, W, H, Type, TargetShelf);
-                !finish_task(CId, TargetShelf)
-            }
+            !navigate_to_shelf(Chosen);
+            // try_drop llamará a finish_task internamente con la shelf que
+            // ACEPTÓ el drop (original o alternativa tras blacklisting).
+            // Si llamáramos !finish_task aquí con `Chosen`, romperíamos en
+            // los casos en que try_drop cayó en una alternativa.
+            !try_drop(CId, Weight, W, H, Type, Chosen)
         }
     }.
 
-// Pregunta bloqueante al scheduler: ¿qué shelf usar para este CId?
-// Espera SIEMPRE hasta obtener respuesta — nunca marca unstorable por timeout.
-// Si hay timeout, reenvía la petición y sigue esperando.
-+!ask_shelf_suggestion(CId, Type, Shelf) <-
+// ─────────────────────────────────────────────────────────────
+//  SELECCIÓN LOCAL DE ESTANTERÍA (usa shelf_usage_local + reservas)
+//
+//  Urgentes → urgent shelves ordenadas por distancia Manhattan.
+//  Regulares → robot_shelf_priority del robot, filtrada por regular_shelf.
+//  Blacklist local se aplica siempre (shelves que fallaron el drop).
+// ─────────────────────────────────────────────────────────────
++!choose_shelf_local(_, urgent, Weight, V, Shelf) <-
     .my_name(Me);
     see;
-    ?at(Me, RX, RY);
-    .abolish(shelf_suggestion(CId, _));
-    .send(scheduler, achieve, suggest_shelf(CId, Type, RX, RY, Me));
-    !wait_shelf_response(CId, Type, Shelf).
+    !robot_position(RX, RY);
+    .findall(sd(S, D),
+             (urgent_shelf(S) & not shelf_blacklist(S) &
+              shelf_location(S, SX, SY) &
+              D = math.abs(SX - RX) + math.abs(SY - RY)),
+             Raw);
+    !sort_sd(Raw, Sorted);
+    !project_sd(Sorted, Ordered);
+    !first_fitting(Ordered, Weight, V, Shelf).
 
-+!wait_shelf_response(CId, _, Shelf) : shelf_suggestion(CId, S) <-
-    Shelf = S;
-    .abolish(shelf_suggestion(CId, _)).
++!choose_shelf_local(_, Type, Weight, V, Shelf) :
+        regular_container(Type) & robot_shelf_priority(Prio) <-
+    !filter_regular_not_blacklisted(Prio, Filtered);
+    !first_fitting(Filtered, Weight, V, Shelf).
 
-+!wait_shelf_response(CId, Type, Shelf) <-
-    .wait({+shelf_suggestion(CId, _)}, 15000, _);
-    if (shelf_suggestion(CId, S)) {
-        Shelf = S;
-        .abolish(shelf_suggestion(CId, _))
+// Catch-all: tipo desconocido o cualquier guarda no satisfecha → unstorable.
++!choose_shelf_local(CId, Type, _, _, none) <-
+    .print("AVISO: choose_shelf_local sin plan aplicable para ", CId, "/", Type).
+
+// Lectura segura de la posición. Evita que un ?at/3 ausente tumbe la intención.
++!robot_position(X, Y) : .my_name(Me) & at(Me, X, Y).
++!robot_position(X, Y) : idlezone(X, Y) <-
+    .print("AVISO: at/3 no disponible — uso idlezone(", X, ",", Y, ") como referencia").
+
++!filter_regular_not_blacklisted([], []).
++!filter_regular_not_blacklisted([S | T], [S | Rest]) :
+        regular_shelf(S) & not shelf_blacklist(S) <-
+    !filter_regular_not_blacklisted(T, Rest).
++!filter_regular_not_blacklisted([_ | T], Rest) <-
+    !filter_regular_not_blacklisted(T, Rest).
+
+// Caso base: lista vacía → no hay shelf válida.
++!first_fitting([], _, _, none).
+
+// Caso recursivo: probamos el primero, decidimos en plan auxiliar
+// (split en cláusulas para evitar sorpresas con .if_then_else cuando
+// alguna sub-meta no termina ground).
++!first_fitting([S | Rest], W, V, Chosen) <-
+    !shelf_fits(S, W, V, Fits);
+    !first_fitting_pick(Fits, S, Rest, W, V, Chosen).
+
+// Si encajó, devuelve esta shelf por el head.
++!first_fitting_pick(true, S, _, _, _, S).
+// Cualquier otro Fits (false / unbound / lo que sea) → siguiente candidata.
++!first_fitting_pick(_, _, Rest, W, V, Chosen) <-
+    !first_fitting(Rest, W, V, Chosen).
+
++!shelf_fits(S, W, V, R) :
+        shelf_capacity(S, MaxW, MaxV) & shelf_usage_local(S, UW, UV) <-
+    .findall(rv(RW, RV), shelf_reservation(S, _, RW, RV, _), L);
+    !sum_rv(L, 0, 0, TW, TV);
+    if (UW + TW + W <= MaxW & UV + TV + V <= MaxV) {
+        R = true
     } else {
-        .print("Timeout esperando shelf_suggestion de ", CId, ", reenvío petición...");
-        .my_name(Me);
-        see;
-        ?at(Me, RX, RY);
-        .send(scheduler, achieve, suggest_shelf(CId, Type, RX, RY, Me));
-        !wait_shelf_response(CId, Type, Shelf)
+        R = false
     }.
+
+// Catch-all defensivo: si por una race entre commit/release falta
+// shelf_capacity o shelf_usage_local para esta shelf, devolvemos false
+// en lugar de dejar morir la intención sin plan aplicable.
++!shelf_fits(S, _, _, false) <-
+    .print("AVISO: shelf_fits sin datos para ", S, " — devuelvo false").
+
++!sum_rv([], AW, AV, AW, AV).
++!sum_rv([rv(W, V) | Rest], AW, AV, TW, TV) <-
+    !sum_rv(Rest, AW + W, AV + V, TW, TV).
+
++!sort_sd([], []).
++!sort_sd(L, [sd(BS, BD) | Rest]) <-
+    !min_sd(L, sd(none, 99999), sd(BS, BD));
+    .delete(sd(BS, BD), L, Without);
+    !sort_sd(Without, Rest).
+
++!min_sd([], Cur, Cur).
++!min_sd([sd(S, D) | R], sd(_, CD), Best) : D < CD <-
+    !min_sd(R, sd(S, D), Best).
++!min_sd([_ | R], Cur, Best) <-
+    !min_sd(R, Cur, Best).
+
++!project_sd([], []).
++!project_sd([sd(S, _) | R], [S | Out]) <-
+    !project_sd(R, Out).
+
+// ─────────────────────────────────────────────────────────────
+//  PROTOCOLO DE RESERVAS (peer-to-peer)
+// ─────────────────────────────────────────────────────────────
++!reserve_shelf(CId, Shelf, W, V) <-
+    .my_name(Me);
+    +shelf_reservation(Shelf, Me, W, V, CId);
+    .print("Reservo ", Shelf, " para ", CId, " (w=", W, ", v=", V, ")");
+    !peer_broadcast(shelf_reserve(CId, Shelf, W, V)).
+
++!release_shelf(CId, Shelf, W, V) <-
+    .my_name(Me);
+    -shelf_reservation(Shelf, Me, W, V, CId);
+    .print("Libero reserva ", Shelf, " de ", CId);
+    !peer_broadcast(shelf_release(CId, Shelf, W, V)).
+
+// IMPORTANTE: usamos .abolish + + en lugar de -+. El operador -+ con
+// argumentos calculados (UW + W) intenta borrar por unificación contra el
+// literal con esos VALORES NUEVOS, no contra el viejo — y deja duplicados.
+// Con .abolish(shelf_usage_local(Shelf, _, _)) eliminamos cualquier copia
+// existente para esa shelf antes de añadir la nueva.
+//
+// [atomic] evita que dos handlers concurrentes (commit + retrieved, o dos
+// commits llegando casi a la vez) lean el mismo UW antiguo y se pisen.
+@local_commit[atomic]
++!commit_shelf(CId, Shelf, W, V) <-
+    .my_name(Me);
+    -shelf_reservation(Shelf, Me, W, V, CId);
+    !update_usage_local(Shelf, W, V);
+    !peer_broadcast(shelf_commit(CId, Shelf, W, V)).
+
+@local_retrieved[atomic]
++!retrieved_shelf(CId, Shelf, W, V) <-
+    !update_usage_local(Shelf, -W, -V);
+    !peer_broadcast(shelf_retrieved(CId, Shelf, W, V)).
+
+// Helper común: lee usage actual, suma deltas (positivos = commit,
+// negativos = retrieve), clampa a 0 y reescribe limpio.
++!update_usage_local(Shelf, DW, DV) :
+        shelf_usage_local(Shelf, UW, UV) <-
+    NewWraw = UW + DW;
+    NewVraw = UV + DV;
+    if (NewWraw < 0) { NewW = 0 } else { NewW = NewWraw };
+    if (NewVraw < 0) { NewV = 0 } else { NewV = NewVraw };
+    .abolish(shelf_usage_local(Shelf, _, _));
+    +shelf_usage_local(Shelf, NewW, NewV).
+
+// Si por una desincronía pasada no hay creencia previa, partimos de 0.
++!update_usage_local(Shelf, DW, DV) <-
+    .print("AVISO: shelf_usage_local(", Shelf, ",_,_) inexistente, parto de 0");
+    if (DW < 0) { NewW = 0 } else { NewW = DW };
+    if (DV < 0) { NewV = 0 } else { NewV = DV };
+    .abolish(shelf_usage_local(Shelf, _, _));
+    +shelf_usage_local(Shelf, NewW, NewV).
+
++!peer_broadcast(Msg) <-
+    .my_name(Me);
+    !peer_send(robot_light, Me, Msg);
+    !peer_send(robot_medium, Me, Msg);
+    !peer_send(robot_heavy, Me, Msg);
+    !peer_send(robot_heavy2, Me, Msg).
+
++!peer_send(Me, Me, _).
++!peer_send(Other, _, Msg) <-
+    .send(Other, tell, Msg).
+
+// ─────────────────────────────────────────────────────────────
+//  HANDLERS DE MENSAJES ENTRANTES (otros robots)
+// ─────────────────────────────────────────────────────────────
++shelf_reserve(CId, Shelf, W, V)[source(R)] <-
+    +shelf_reservation(Shelf, R, W, V, CId);
+    -shelf_reserve(CId, Shelf, W, V)[source(R)].
+
+@peer_commit[atomic]
++shelf_commit(CId, Shelf, W, V)[source(R)] <-
+    -shelf_reservation(Shelf, R, W, V, CId);
+    !update_usage_local(Shelf, W, V);
+    -shelf_commit(CId, Shelf, W, V)[source(R)].
+
++shelf_release(CId, Shelf, W, V)[source(R)] <-
+    -shelf_reservation(Shelf, R, W, V, CId);
+    -shelf_release(CId, Shelf, W, V)[source(R)].
+
+@peer_retrieved[atomic]
++shelf_retrieved(CId, Shelf, W, V)[source(R)] <-
+    !update_usage_local(Shelf, -W, -V);
+    -shelf_retrieved(CId, Shelf, W, V)[source(R)].
 
 // ─────────────────────────────────────────────────────────────
 //  CONSULTA DE UBICACIÓN AL SCHEDULER
@@ -235,90 +522,64 @@ exit_cell(2,0). exit_cell(2,1).
     }.
 
 // ─────────────────────────────────────────────────────────────
-//  SELECCIÓN LOCAL DE ESTANTERÍA
-//  Cada robot elige por distancia entre las que aceptan el tipo
-//  y que no están en su lista negra. Si drop_at falla, el shelf
-//  se añade a shelf_blacklist/1 y se reintenta con el siguiente.
-// ─────────────────────────────────────────────────────────────
-// 1º intento: usar la sugerencia que nos dio el scheduler (si sigue viva).
-+!pick_shelf(CId, _, _, _, _, Shelf) :
-        suggested_shelf(CId, S) & not shelf_blacklist(S) <-
-    Shelf = S;
-    -suggested_shelf(CId, S).
-
-// Fallback (drop anterior falló, o sugerencia ya blacklisted): la más cercana
-// entre las que aceptan el tipo y no están en la blacklist local.
-+!pick_shelf(_, _, _, _, Type, Shelf) <-
-    .my_name(Me);
-    see;
-    ?at(Me, RX, RY);
-    .findall(S, (accepts(Type, S) & not shelf_blacklist(S)), Cands);
-    !sort_shelves_by_distance(Cands, RX, RY, Sorted);
-    if (Sorted == []) {
-        Shelf = none
-    } else {
-        [Shelf | _] = Sorted
-    }.
-
-+!sort_shelves_by_distance([], _, _, []).
-+!sort_shelves_by_distance(L, RX, RY, [Best | Rest]) <-
-    !closest_shelf(L, RX, RY, 999999, none, Best);
-    .delete(Best, L, Without);
-    !sort_shelves_by_distance(Without, RX, RY, Rest).
-
-+!closest_shelf([], _, _, _, B, B).
-+!closest_shelf([S | T], RX, RY, MinD, Cur, Best) :
-        shelf_location(S, SX, SY) <-
-    D = math.abs(SX - RX) + math.abs(SY - RY);
-    if (D < MinD) {
-        !closest_shelf(T, RX, RY, D, S, Best)
-    } else {
-        !closest_shelf(T, RX, RY, MinD, Cur, Best)
-    }.
-+!closest_shelf([_ | T], RX, RY, MinD, Cur, Best) <-
-    !closest_shelf(T, RX, RY, MinD, Cur, Best).
-
-// ─────────────────────────────────────────────────────────────
 //  DEPOSITAR
+//
+//  Si drop_at falla, liberamos la reserva (broadcast release), añadimos
+//  la shelf a la blacklist local e intentamos elegir otra. Si no queda
+//  ninguna que acepte + tenga hueco, depositamos en zona de clasificación.
 // ─────────────────────────────────────────────────────────────
 +!try_drop(CId, Weight, W, H, Type, Shelf) <-
     drop_at(Shelf);
-    .print("Depositado ", CId, " en ", Shelf).
+    .print("Depositado ", CId, " en ", Shelf);
+    // Cierre de la cadena: finish_task usa SIEMPRE la shelf real donde se
+    // aceptó el drop. Si veníamos de una recursión por blacklist, Shelf es
+    // ya la alternativa y la reserva activa coincide.
+    !finish_task(CId, Shelf).
 
 -!try_drop(CId, Weight, W, H, Type, Shelf) <-
-    .print("Fallo al depositar ", CId, " en ", Shelf, ", la descarto y pruebo otra...");
+    .print("Fallo al depositar ", CId, " en ", Shelf, ", libero reserva y pruebo otra...");
+    V = W * H;
+    !release_shelf(CId, Shelf, Weight, V);
     +shelf_blacklist(Shelf);
-    !pick_shelf(CId, Weight, W, H, Type, AltShelf);
-    if (AltShelf == none) {
-        .print("Sin alternativa para ", CId, ", reintento en 2s...");
+    !choose_shelf_local(CId, Type, Weight, V, Alt);
+    if (Alt == none) {
         .wait(2000);
-        !pick_shelf(CId, Weight, W, H, Type, Retry);
+        !choose_shelf_local(CId, Type, Weight, V, Retry);
         if (Retry == none) {
-            .print("Sigo sin alternativa para ", CId, " — abandono");
+            .print("Sigo sin alternativa para ", CId, " — lo deposito en zona de clasificación");
+            !drop_in_processing_zone(CId, Type);
             -+state(idle);
             !process_next
         } else {
+            !reserve_shelf(CId, Retry, Weight, V);
             !navigate_to_shelf(Retry);
             !try_drop(CId, Weight, W, H, Type, Retry)
         }
     } else {
-        !navigate_to_shelf(AltShelf);
-        !try_drop(CId, Weight, W, H, Type, AltShelf)
+        !reserve_shelf(CId, Alt, Weight, V);
+        !navigate_to_shelf(Alt);
+        !try_drop(CId, Weight, W, H, Type, Alt)
     }.
 
 // ─────────────────────────────────────────────────────────────
-//  FINALIZAR TAREA → notificar al scheduler vía guardado
+//  FINALIZAR TAREA → commit de la reserva + notificación al scheduler
 // ─────────────────────────────────────────────────────────────
++!drop_in_processing_zone(CId, Type) <-
+    !navigate_adjacent(4, 0);
+    drop_in_processing;
+    .print("Paquete ", CId, " dejado en zona de procesamiento (invalido/unstorable).").
+
 +!finish_task(CId, Shelf) <-
     task_complete(CId, Shelf);
+    .my_name(Me);
+    ?shelf_reservation(Shelf, Me, W, V, CId);
+    !commit_shelf(CId, Shelf, W, V);
     .send(scheduler, tell, guardado(CId, Shelf));
-    // Memoria local de ownership: "este CId lo guardé yo". Se usa durante
-    // los deadlines para que sólo su dueño intente sacarlo del almacén.
-    +my_stored(CId);
-    // Depositado OK → limpiamos blacklists que hubiéramos marcado por fallos
-    // puntuales; así el próximo drop vuelve a considerar todas las shelves.
+    // Memoria local de ownership + dimensiones, para el ciclo de salida:
+    // el retrieve necesita saber (W, V) para actualizar usage local.
+    +my_stored(CId, Shelf, W, V);
+    // Depositado OK → limpiamos blacklist de fallos puntuales.
     .abolish(shelf_blacklist(_));
-    .abolish(suggested_shelf(CId, _));
     -+state(idle);
     .print("Completado: ", CId, " → ", Shelf);
     !process_next.
@@ -360,10 +621,10 @@ can_i_manage_weight(Weight) :-
     max_weight(MaxW) & Weight <= MaxW.
 
 // Regla de autonomía: durante un deadline cada robot sólo se interesa por
-//   · los paquetes que él mismo guardó (at_shelf + my_stored)
+//   · los paquetes que él mismo guardó (at_shelf + my_stored/4)
 //   · los unstorable que quedaron en la entrada (at_entry, sin dueño)
 // Así el scheduler no tiene que asignar nadie: cada robot filtra solo.
-can_i_exit(CId, at_shelf(_))   :- my_stored(CId).
+can_i_exit(CId, at_shelf(_))   :- my_stored(CId, _, _, _).
 can_i_exit(_,   at_entry(_,_)).
 
 // ─── Recepción de un exit_item ──────────────────────────────
@@ -481,10 +742,12 @@ can_i_exit(_,   at_entry(_,_)).
     .print("Exit de ", CId, " desde shelf ", Shelf);
     !navigate_to_shelf(Shelf);
     retrieve(CId);
+    // Actualizo mi usage local y se lo comunico a los otros robots.
+    ?my_stored(CId, Shelf, W, V);
+    -my_stored(CId, Shelf, W, V);
+    !retrieved_shelf(CId, Shelf, W, V);
     !go_to_exit_cell(EX, EY);
     drop_at_exit(EX, EY);
-    // Ya lo saqué: libero mi ownership local.
-    -my_stored(CId);
     .send(scheduler, tell, exit_done(CId, Type));
     .abolish(exit_item(CId, _, _, _, _, _));
     -exit_in_progress(_);

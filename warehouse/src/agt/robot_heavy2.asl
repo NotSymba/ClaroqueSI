@@ -10,8 +10,17 @@ min_size(1, 2).
 timePerMove(500).
 priority(3).
 
-// heavy2 no recibe container_available directamente del scheduler; las
-// tareas de entrada llegan vía assign_here desde robot_heavy (router).
+// Prioridad propia: heavy2 prefiere el flanco DERECHO del almacén
+// (shelves con x mayor) para repartir físicamente la carga con heavy,
+// que prefiere el flanco izquierdo. shelf_9 sigue primero por ser la
+// más lejana (y la de mayor capacidad).
+robot_shelf_priority([shelf_9, shelf_7, shelf_6, shelf_4, shelf_3, shelf_2]).
+
+// Peer simétrico de robot_heavy: ambos reciben container_available del
+// scheduler y ejecutan decide_heavy_peer (work.asl). La coordinación es
+// bilateral — ningún robot "manda", se ponen de acuerdo por carga actual.
+is_router_robot.
+
 can_i_manage(W, H, Weight) :-
     max_weight(MaxWeight) &
     max_size(MaxW, MaxH) &
@@ -25,19 +34,5 @@ can_i_manage(W, H, Weight) :-
 !start.
 
 +!start <-
-    .print("Robot heavy2 online. A la espera de asignaciones de robot_heavy...");
+    .print("Robot heavy2 online. Coordinando con robot_heavy (simétrico)...");
     see.
-
-// Asignación directa desde robot_heavy (router). Durante exit_in_progress
-// se encola igualmente; el procesamiento está gated más abajo.
-+assign_here(CId, W, H, Weight, Type) <-
-    .print("Recibida asignación de ", CId, " desde robot_heavy");
-    !enqueue(CId, W, H, Weight, Type);
-    .abolish(assign_here(CId, _, _, _, _)).
-
-// robot_heavy consulta estado para decidir reparto
-+!report_status_to(Requester) :
-    container_queue(Q) & state(S) <-
-    .length(Q, L);
-    .print("report_status_to ", Requester, " (cola=", L, ", estado=", S, ")");
-    .send(Requester, tell, heavy_peer_status(L, S)).

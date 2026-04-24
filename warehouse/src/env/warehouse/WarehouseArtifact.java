@@ -149,6 +149,9 @@ public class WarehouseArtifact extends Environment {
                 case "drop_at":
                     return executeDropAt(agName, action);
 
+                case "drop_in_processing":
+                    return executeDropInProcessing(agName, action);
+
                 case "drop_at_exit":
                     return executeDropAtExit(agName, action);
 
@@ -477,6 +480,48 @@ public class WarehouseArtifact extends Environment {
             addError(agName, "too_far", "Robot not adjacent to exit cell");
         } else {
             addError(agName, "unknown", "Unexpected error dropping at exit");
+        }
+        return false;
+    }
+
+    /**
+     * Acción: drop_in_processing(DestX, DestY)
+     */
+    private boolean executeDropInProcessing(String agName, Structure action) {
+        Robot robot = model.getRobots().get(agName);
+        Container carried = robot != null ? robot.getCarriedContainer() : null;
+        String cid = carried != null ? carried.getId() : "?";
+        String type = carried != null ? carried.getType() : "?";
+
+        int error = model.dropAtProcessing(agName, action);
+
+        if (error == 0) {
+            int destX = carried.getX();
+            int destY = carried.getY();
+            viewAct(String.format("%s dropped %s in processing zone at (%d,%d)", agName, cid, destX, destY));
+            removePerceptsByUnif(agName, Literal.parseLiteral("picked(_)"));
+            
+            // Updates occupancy for the scheduler
+            updateOccupancy(destX, destY, true);
+            updateContainerAt(cid, destX, destY);
+            
+            // Notify scheduler it's unstorable!
+            addPercept("scheduler", Literal.parseLiteral(
+                    "unstorable(" + cid + "," + type + ")"));
+                    
+            return true;
+        } else if (error == 1) {
+            addError(agName, "invalid_drop", "Robot not found");
+        } else if (error == 2) {
+            addError(agName, "not_carrying", "Robot is not carrying anything");
+        } else if (error == 3) {
+            addError(agName, "not_empty_classification", "Destination is not an empty classification cell");
+        } else if (error == 4) {
+            addError(agName, "out_of_bounds", "Destination outside classification zone");
+        } else if (error == 5) {
+            addError(agName, "too_far", "Robot not adjacent to classification cell");
+        } else {
+            addError(agName, "unknown", "Unexpected error dropping in processing");
         }
         return false;
     }

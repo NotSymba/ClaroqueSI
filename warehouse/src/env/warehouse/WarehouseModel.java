@@ -450,6 +450,73 @@ public class WarehouseModel extends GridWorldModel {
     }
 
     /**
+     * El robot deposita el contenedor que carga en una celda de clasificación.
+     * action: drop_in_processing(DestX, DestY)
+     */
+    public int dropAtProcessing(String agName, Structure action) {
+        try {
+            Robot robot = robots.get(agName);
+            if (robot == null) {
+                totalErrors++;
+                return 1;
+            }
+            if (!robot.isCarrying()) {
+                totalErrors++;
+                return 2;
+            }
+
+            int destX = -1;
+            int destY = -1;
+            int minDst = 9999;
+            for (int x = 3; x < 5; x++) {
+                for (int y = 0; y < 2; y++) {
+                    if (grid[x][y] == CellType.CLASSIFICATION) {
+                        int dst = robot.distanceTo(x, y);
+                        if (dst <= 1 && dst < minDst) {
+                            destX = x; destY = y; minDst = dst;
+                        }
+                    }
+                }
+            }
+            if (destX == -1) {
+                // If not adjacent, just find any empty one
+                for (int x = 3; x < 5; x++) {
+                    for (int y = 0; y < 2; y++) {
+                        if (grid[x][y] == CellType.CLASSIFICATION) {
+                            int dst = robot.distanceTo(x, y);
+                            if (dst < minDst) {
+                                destX = x; destY = y; minDst = dst;
+                            }
+                        }
+                    }
+                }
+            }
+            
+            if (destX == -1) {
+                totalErrors++;
+                return 3; // No empty classification cells
+            }
+
+            Container container = robot.getCarriedContainer();
+            String cid = container.getId();
+            
+            grid[destX][destY] = CellType.PACKAGE;
+            container.setPosition(destX, destY);
+            
+            robot.drop();
+            container.setPicked(false);
+            container.setAssignedShelf(null);
+            
+            System.out.println("Robot " + agName + " dropped " + cid + " at processing (" + destX + "," + destY + ")");
+            return 0;
+        } catch (Exception e) {
+            e.printStackTrace();
+            totalErrors++;
+            return 6;
+        }
+    }
+
+    /**
      * El robot deposita el contenedor que carga en una celda de la zona de
      * salida (EXIT, x in [0..2], y in [0..1]). El contenedor sale definitivamente
      * del sistema.

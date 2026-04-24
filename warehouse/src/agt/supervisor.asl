@@ -299,43 +299,6 @@ type_group(urgent,   urgent).
     .send(scheduler, tell, stored_list_response(Kind, L)).
 
 /* ============================================================================
- * SELECCIÓN DE SHELF PARA GUARDAR (protocolo con scheduler)
- *
- *   El scheduler construye una lista de shelves ordenada por la prioridad
- *   del robot y nos la manda; aquí recorremos IN ORDER y contestamos al robot
- *   (Requester) con la primera que tiene CAPACIDAD REAL para el paquete:
- *   UW+Weight ≤ MaxW  y  UV+V ≤ MaxV.
- *
- *   Ojo: shelf_full_marked/1 es sólo informativo (umbral del 90 % para alertas
- *   y métricas). NO se usa para excluir shelves aquí, porque una shelf al 91 %
- *   puede seguir aceptando paquetes pequeños. La decisión se toma siempre
- *   sobre la capacidad real.
- *
- *   Si la lista se agota sin encontrar nada libre, respondemos none.
- * ============================================================================ */
-
-+!pick_first_free(CId, _, _, [], Requester) <-
-    .print("Supervisor: sin shelf libre para ", CId, " → informo none a ", Requester);
-    .send(Requester, tell, shelf_suggestion(CId, none)).
-
-/* Sin peso/vol conocido → aceptamos la primera */
-+!pick_first_free(CId, 0, 0, [S | _], Requester) <-
-    .print("Supervisor: shelf ", S, " para ", CId, " (sin peso/vol)");
-    .send(Requester, tell, shelf_suggestion(CId, S)).
-
-/* Con peso/vol: comprobamos que quepa nominalmente */
-+!pick_first_free(CId, Weight, V, [S | _], Requester) :
-        shelf_capacity(S, MaxW, MaxV) & shelf_usage(S, UW, UV) &
-        UW + Weight <= MaxW & UV + V <= MaxV <-
-    .print("Supervisor: shelf ", S, " para ", CId, " — cabe (", UW+Weight, "/", MaxW, "kg, ",
-           UV+V, "/", MaxV, "u³)");
-    .send(Requester, tell, shelf_suggestion(CId, S)).
-
-/* No cabe → probamos la siguiente */
-+!pick_first_free(CId, Weight, V, [_ | Rest], Requester) <-
-    !pick_first_free(CId, Weight, V, Rest, Requester).
-
-/* ============================================================================
  * ESTADÍSTICAS Y ESTADO DE ROBOTS
  * ============================================================================ */
 
