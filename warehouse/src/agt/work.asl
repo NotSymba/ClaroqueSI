@@ -689,12 +689,17 @@ can_i_exit(_,   at_entry(_,_)).
     +state(busy);
     !handle_container(CId, Weight, W, H, Type).
 
+// Defensa en profundidad: SÓLO consideramos exit_items cuyo Kind coincide
+// con un active_deadline(Kind) vigente. Si el scheduler cerró el deadline
+// y todavía queda algún exit_item local por un untell tardío, lo ignoramos.
+// Si no hay deadline activo, Cands = [] y caemos al fallback_to_normal.
 +!pick_best_exit_item(Best) <-
     .my_name(Me);
     see;
-    ?at(Me, RX, RY);
+    !robot_position(RX, RY);
     .findall(ex(CId, Loc, W, V, Type, Kind),
-             (exit_item(CId, Loc, W, V, Type, Kind) &
+             (active_deadline(Kind) &
+              exit_item(CId, Loc, W, V, Type, Kind) &
               can_i_manage_weight(W) &
               can_i_exit(CId, Loc)),
              Cands);

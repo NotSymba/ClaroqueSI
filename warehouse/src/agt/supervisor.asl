@@ -269,9 +269,15 @@ type_group(urgent,   urgent).
     .print("Supervisor: scheduler ha iniciado el ciclo de salida");
     -exit_cycle_started[source(scheduler)].
 
+/* Al terminar el ciclo reseteamos TODAS las notificaciones, no sólo la del
+ * grupo disparador: ambos deadlines drenaron estanterías, y si otro grupo
+ * se saturó DURANTE el ciclo el scheduler descartó nuestro no_space
+ * (guarda not exit_cycle_active). Resetear todo nos permite re-emitir el
+ * aviso en el próximo package_stored si la saturación persiste. */
 +exit_cycle_ended(Group)[source(scheduler)] <-
-    -blocked_group_notified(Group);
-    .print("Supervisor: deadline del grupo ", Group, " terminado — notificación reseteada");
+    .abolish(blocked_group_notified(_));
+    .print("Supervisor: ciclo terminado (trigger=", Group,
+           ") — notificaciones reseteadas para todos los grupos");
     -exit_cycle_ended(Group)[source(scheduler)].
 
 /* ============================================================================

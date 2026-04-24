@@ -305,31 +305,60 @@ unstorable_threshold(3).
     -no_space(Type)[source(supervisor)].
 
 /* ---------------------------------------------------------------------------
- *  Arranque del ciclo (T0) — bloquea generación y lanza los dos deadlines
+ *  Arranque del ciclo (T0) — REACTIVO, NO SECUENCIAL.
+ *
+ *  Un disparo activa UN ÚNICO deadline, el del grupo afectado:
+ *     - urgent  → deadline CORTO  (ΔT,  solo urgentes, shelves S1/S5/S8)
+ *     - normal  → deadline LARGO  (2ΔT, standard+fragile, resto de shelves)
+ *
+ *  NO se encadenan. Si al terminar el supervisor sigue detectando saturación
+ *  en el otro grupo, emitirá su propio no_space y dispararemos un nuevo ciclo
+ *  con ese grupo. Así cada deadline responde a una condición real y no a un
+ *  calendario ciego.
+ *
+ *  La guarda 'not exit_cycle_active' en el handler de no_space y en
+ *  check_unstorable_threshold garantiza que nunca haya dos deadlines
+ *  solapados: los triggers que lleguen durante un ciclo se descartan; el
+ *  supervisor re-emite cuando reseteamos sus flags en exit_cycle_ended.
  * ------------------------------------------------------------------------- */
 +!begin_exit_cycle(TriggerGroup) <-
     +exit_cycle_active;
     +trigger_group(TriggerGroup);
-    !block_all_types;
+    !block_group(TriggerGroup);
     .send(supervisor, tell, exit_cycle_started);
-    .print("Scheduler: T0 — INICIO ciclo de salida (disparado por grupo ", TriggerGroup, ")");
-    !run_deadline(short, [urgent],            1);   // ΔT·1
-    !run_deadline(long,  [standard, fragile], 3);   // ΔT·3 → [T0+ΔT, T0+3ΔT]
-    !end_exit_cycle.
+    .print("Scheduler: T0 — INICIO ciclo de salida (grupo=", TriggerGroup, ")");
+    !run_deadline_for(TriggerGroup);
+    !end_exit_cycle(TriggerGroup).
 
-+!block_all_types <-
+/* Dispatch: solo el deadline del grupo disparador. */
++!run_deadline_for(urgent) <-
+    !run_deadline(short, [urgent], 1).
+
++!run_deadline_for(normal) <-
+    !run_deadline(long, [standard, fragile], 2).
+
+/* Bloqueo per-grupo: sólo para el grupo disparador. */
++!block_group(urgent) <-
     block_generation(urgent);
+    +blocked_group(urgent);
+    .print("Scheduler: generación URGENT bloqueada (normales siguen fluyendo)").
+
++!block_group(normal) <-
     block_generation(standard);
     block_generation(fragile);
-    +blocked_group(urgent);
-    +blocked_group(normal).
+    +blocked_group(normal);
+    .print("Scheduler: generación STANDARD+FRAGILE bloqueada (urgentes siguen fluyendo)").
 
-+!unblock_all_types <-
++!unblock_group(urgent) <-
     unblock_generation(urgent);
+    -blocked_group(urgent);
+    .print("Scheduler: generación URGENT reanudada").
+
++!unblock_group(normal) <-
     unblock_generation(standard);
     unblock_generation(fragile);
-    -blocked_group(urgent);
-    -blocked_group(normal).
+    -blocked_group(normal);
+    .print("Scheduler: generación STANDARD+FRAGILE reanudada").
 
 /* ---------------------------------------------------------------------------
  *  Un deadline: arma listas, publica, espera Duration ms, limpia.
@@ -496,15 +525,20 @@ unstorable_threshold(3).
     -container_exited(CId, Type, Weight, V).
 
 /* ---------------------------------------------------------------------------
- *  FIN DEL CICLO — reanuda generación + flush de pending_announce
+ *  FIN DEL CICLO — reanuda generación SÓLO del grupo disparador (el otro no
+ *  fue bloqueado) + flush de pending_announce.
+ *
+ *  Enviamos exit_cycle_ended(TriggerGroup) al supervisor con el grupo como
+ *  argumento: el supervisor lo usa para resetear SUS notificaciones y volver
+ *  a poder emitir no_space si la saturación persiste.
  * ------------------------------------------------------------------------- */
-+!end_exit_cycle <-
++!end_exit_cycle(TriggerGroup) <-
     -exit_cycle_active;
     -trigger_group(_);
     .abolish(unstorable_pending(_, _));
-    !unblock_all_types;
-    .send(supervisor, tell, exit_cycle_ended);
-    .print("Scheduler: FIN ciclo de salida — reanudo generación normal");
+    !unblock_group(TriggerGroup);
+    .send(supervisor, tell, exit_cycle_ended(TriggerGroup));
+    .print("Scheduler: FIN ciclo de salida (trigger=", TriggerGroup, ")");
     !flush_all_pending_announce.
 
 +!flush_all_pending_announce <-
