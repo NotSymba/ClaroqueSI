@@ -258,77 +258,6 @@ public class WarehouseModel extends GridWorldModel {
     // ACCIONES DE AGENTES
     // -------------------------------------------------------------------------
     /**
-     * Mueve un paquete de la zona de entrada a una posición de la zona de
-     * clasificación. action: moveToProcessing(containerId, destX, destY)
-     *
-     * La celda origen vuelve a CellType.ENTRANCE y su slot se devuelve al pool
-     * libre. La celda destino pasa a CellType.PACKAGE.
-     *
-     * Códigos de retorno: 0 = ok 1 = robot o contenedor no encontrado 2 = el
-     * contenedor ya fue recogido o no está en zona de entrada 3 = destino
-     * ocupado (no es CLASSIFICATION libre) 4 = destino fuera de la zona de
-     * clasificación 5 = error inesperado
-     */
-    public int moveToProcessing(String agName, Structure action) {
-        try {
-            String containerId = action.getTerm(0).toString().replace("\"", "");
-            int destX = Integer.parseInt(action.getTerm(1).toString().replace("\"", ""));
-            int destY = Integer.parseInt(action.getTerm(2).toString().replace("\"", ""));
-
-            Container container = containers.get(containerId);
-            Robot robot = robots.get(agName);
-
-            if (robot == null || container == null) {
-                totalErrors++;
-                return 1;
-            }
-
-            if (container.isPicked()) {
-                totalErrors++;
-                return 2;
-            }
-
-            int srcX = container.getX();
-            int srcY = container.getY();
-
-            // El paquete debe estar en la celda marcada como PACKAGE dentro de la zona de entrada
-            if (grid[srcX][srcY] != CellType.PACKAGE) {
-                totalErrors++;
-                return 2;
-            }
-
-            // El destino debe ser una celda de clasificación libre
-            if (grid[destX][destY] != CellType.CLASSIFICATION) {
-                totalErrors++;
-                return 3;
-            }
-
-            // Verificar que el destino está dentro de los límites de la zona de clasificación
-            if (destX < 3 || destX >= 5 || destY < 0 || destY >= 2) {
-                totalErrors++;
-                return 4;
-            }
-
-            // Restaurar origen a ENTRANCE y devolver slot al pool
-            grid[srcX][srcY] = CellType.ENTRANCE;
-            freeEntranceSlots.offer(new Location(srcX, srcY));
-
-            // Colocar paquete en destino
-            grid[destX][destY] = CellType.PACKAGE;
-            container.setPosition(destX, destY);
-
-            System.out.println("Container " + containerId + " moved from entrance ("
-                    + srcX + "," + srcY + ") to processing (" + destX + "," + destY + ")");
-            return 0;
-
-        } catch (Exception e) {
-            e.printStackTrace();
-            totalErrors++;
-            return 5;
-        }
-    }
-
-    /**
      * El robot recoge un contenedor desde la zona de
      * clasificación/procesamiento. action: pickUp(containerId)
      *
@@ -446,73 +375,6 @@ public class WarehouseModel extends GridWorldModel {
             e.printStackTrace();
             totalErrors++;
             return 5;
-        }
-    }
-
-    /**
-     * El robot deposita el contenedor que carga en una celda de clasificación.
-     * action: drop_in_processing(DestX, DestY)
-     */
-    public int dropAtProcessing(String agName, Structure action) {
-        try {
-            Robot robot = robots.get(agName);
-            if (robot == null) {
-                totalErrors++;
-                return 1;
-            }
-            if (!robot.isCarrying()) {
-                totalErrors++;
-                return 2;
-            }
-
-            int destX = -1;
-            int destY = -1;
-            int minDst = 9999;
-            for (int x = 3; x < 5; x++) {
-                for (int y = 0; y < 2; y++) {
-                    if (grid[x][y] == CellType.CLASSIFICATION) {
-                        int dst = robot.distanceTo(x, y);
-                        if (dst <= 1 && dst < minDst) {
-                            destX = x; destY = y; minDst = dst;
-                        }
-                    }
-                }
-            }
-            if (destX == -1) {
-                // If not adjacent, just find any empty one
-                for (int x = 3; x < 5; x++) {
-                    for (int y = 0; y < 2; y++) {
-                        if (grid[x][y] == CellType.CLASSIFICATION) {
-                            int dst = robot.distanceTo(x, y);
-                            if (dst < minDst) {
-                                destX = x; destY = y; minDst = dst;
-                            }
-                        }
-                    }
-                }
-            }
-            
-            if (destX == -1) {
-                totalErrors++;
-                return 3; // No empty classification cells
-            }
-
-            Container container = robot.getCarriedContainer();
-            String cid = container.getId();
-            
-            grid[destX][destY] = CellType.PACKAGE;
-            container.setPosition(destX, destY);
-            
-            robot.drop();
-            container.setPicked(false);
-            container.setAssignedShelf(null);
-            
-            System.out.println("Robot " + agName + " dropped " + cid + " at processing (" + destX + "," + destY + ")");
-            return 0;
-        } catch (Exception e) {
-            e.printStackTrace();
-            totalErrors++;
-            return 6;
         }
     }
 
@@ -692,9 +554,10 @@ public class WarehouseModel extends GridWorldModel {
                 return 3;
             }
             robot.setPosition(x, y);
-            if (escacharPaquete(agName) != null) {
-                return 5;
-            }
+            // El aplastamiento de un contenedor lo gestiona el caller
+            // (executeSteap) llamando a escacharPaquete tras el move; así
+            // el éxito del paso no depende del estado de la celda destino
+            // y la intención de moverse no se pierde por un splash.
             return 0;
 
         } catch (Exception e) {
@@ -1010,9 +873,14 @@ public class WarehouseModel extends GridWorldModel {
 
     /**
      * Si el robot pisa un paquete no recogido, lo destruye y restaura la celda.
+     * Devuelve el contenedor destruido (para notificar a los agentes) o null
+     * si la celda no contenía un paquete sin recoger.
      */
-    private String escacharPaquete(String rid) {
+    public Container escacharPaquete(String rid) {
         Robot r = robots.get(rid);
+        if (r == null) {
+            return null;
+        }
         for (Container c : containers.values()) {
             if (c.getX() == r.getX() && c.getY() == r.getY() && !c.isPicked()) {
                 int cx = c.getX();
@@ -1031,7 +899,7 @@ public class WarehouseModel extends GridWorldModel {
 
                 containers.remove(c.getId());
                 System.out.println("Paquete " + c.getId() + " escachado por " + r.getId());
-                return c.getId();
+                return c;
             }
         }
         return null;

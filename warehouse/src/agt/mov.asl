@@ -236,6 +236,24 @@ sign(X, 0)  :- X = 0.
 // Compatibilidad con llamadas antiguas a try_move/4
 +!try_move(NX, NY, TX, TY) <- !try_move(NX, NY, TX, TY, adjacent(false)).
 
+// ── Recuperación defensiva ────────────────────────────────────
+// Si step(...) o cualquier sub-meta del cuerpo lanza fallo (env
+// devolvió false por out-of-bounds, excepción inesperada, etc.),
+// reseteamos el estado de navegación y reintentamos UNA vez. Si
+// el segundo intento también muere, propagamos la fallo arriba
+// para que los handlers de handle_container/execute_exit limpien.
+-!try_move(_, _, TX, TY, Mode) : not retrying_move <-
+    .print("AVISO: try_move falló — limpio estado y reintento navigate_to");
+    +retrying_move;
+    !clear_nav_state;
+    .wait(150);
+    !navigate_to(TX, TY, Mode);
+    -retrying_move.
+
+-!try_move(NX, NY, _, _, _) <-
+    -retrying_move;
+    .print("AVISO: try_move(", NX, ",", NY, ") falló por segunda vez — propago fallo").
+
 
 // ═════════════════════════════════════════════════════════════
 // GESTIÓN DE BLOQUEOS — propaga Mode

@@ -509,7 +509,8 @@ shelf_usage_local(shelf_9, 0, 0).
 +!verify_position(CId, TX, TY) <-
     !query_location(CId, NX, NY);
     if (NX == none) {
-        .print("Confirmación ", CId, " falló — continúo con última posición")
+        .print("Confirmación ", CId, " falló — el contenedor ya no existe, abandono");
+        .fail
     } else {
         if (NX == TX & NY == TY) {
             .print("Contenedor ", CId, " confirmado en (", TX, ",", TY, ")")
@@ -526,7 +527,9 @@ shelf_usage_local(shelf_9, 0, 0).
 //
 //  Si drop_at falla, liberamos la reserva (broadcast release), añadimos
 //  la shelf a la blacklist local e intentamos elegir otra. Si no queda
-//  ninguna que acepte + tenga hueco, depositamos en zona de clasificación.
+//  ninguna que acepte + tenga hueco, caso límite: entregamos el paquete
+//  directamente a la zona de salida y pedimos al scheduler que dispare
+//  un ciclo de salida del grupo para vaciar las estanterías.
 // ─────────────────────────────────────────────────────────────
 +!try_drop(CId, Weight, W, H, Type, Shelf) <-
     drop_at(Shelf);
@@ -546,8 +549,8 @@ shelf_usage_local(shelf_9, 0, 0).
         .wait(2000);
         !choose_shelf_local(CId, Type, Weight, V, Retry);
         if (Retry == none) {
-            .print("Sigo sin alternativa para ", CId, " — lo deposito en zona de clasificación");
-            !drop_in_processing_zone(CId, Type);
+            .print("Sigo sin alternativa para ", CId, " — caso límite: salida directa + ciclo de salida");
+            !force_exit_carried(CId, Type);
             -+state(idle);
             !process_next
         } else {
@@ -564,10 +567,16 @@ shelf_usage_local(shelf_9, 0, 0).
 // ─────────────────────────────────────────────────────────────
 //  FINALIZAR TAREA → commit de la reserva + notificación al scheduler
 // ─────────────────────────────────────────────────────────────
-+!drop_in_processing_zone(CId, Type) <-
-    !navigate_adjacent(4, 0);
-    drop_in_processing;
-    .print("Paquete ", CId, " dejado en zona de procesamiento (invalido/unstorable).").
+// Caso límite: el robot lleva un paquete que ya no puede colocar en
+// ninguna shelf (típicamente por desajuste de sincronización o
+// precisión en la contabilidad). Lo entregamos directamente en la
+// zona de salida y pedimos al scheduler que arranque un ciclo de
+// salida del grupo correspondiente para vaciar las estanterías.
++!force_exit_carried(CId, Type) <-
+    !go_to_exit_cell(EX, EY);
+    drop_at_exit(EX, EY);
+    .send(scheduler, tell, force_exit_cycle(Type));
+    .print("Caso límite: ", CId, " entregado a la salida y ciclo solicitado (tipo=", Type, ").").
 
 // Caso normal: la reserva sigue ahí (no hubo purga por deadline en medio).
 +!finish_task(CId, Shelf) :
@@ -608,6 +617,85 @@ shelf_usage_local(shelf_9, 0, 0).
 -!go_idle <-
     .print("No pude llegar a idle zone, esperando trabajo aquí");
     -+state(idle).
+
+// ═════════════════════════════════════════════════════════════
+//  CONTENEDOR DESTRUIDO (splash) — purga local de referencias
+//
+//  El env emite container_destroyed/2 a todos los agentes cuando
+//  un robot pisa un paquete sin recoger. Cada robot debe:
+//    · sacar el CId de su cola si lo tenía pendiente
+//    · borrar exit_item / container_available / location asociados
+//    · liberar la reserva de shelf si la hizo (broadcast a peers)
+//    · borrar my_stored si por algún motivo lo tenía registrado
+//
+//  No tocamos picked(_) porque el env nunca destruye paquetes recogidos
+//  (escacharPaquete excluye c.isPicked()), así que un container_destroyed
+//  no puede coincidir con un paquete que llevamos en la mano.
+// ═════════════════════════════════════════════════════════════
++container_destroyed(CId, _) <-
+    .print("Aviso: ", CId, " destruido — limpio referencias locales");
+    !remove_from_queue(CId);
+    .abolish(container_available(CId, _, _, _, _));
+    .abolish(exit_item(CId, _, _, _, _, _));
+    .abolish(container_location(CId, _, _));
+    .abolish(container_relocated(CId, _, _));
+    .abolish(location(CId, _, _));
+    .abolish(my_stored(CId, _, _, _));
+    !release_if_reserved(CId);
+    -container_destroyed(CId, _).
+
++!remove_from_queue(CId) : container_queue(Q) <-
+    !filter_queue(Q, CId, NewQ);
+    -+container_queue(NewQ).
++!remove_from_queue(_).
+
++!filter_queue([], _, []).
++!filter_queue([pkg(CId, _, _, _, _) | Rest], CId, Out) <-
+    !filter_queue(Rest, CId, Out).
++!filter_queue([Pkg | Rest], CId, [Pkg | Out]) <-
+    !filter_queue(Rest, CId, Out).
+
+// Si tenía una reserva activa para este CId la libero (broadcast a peers).
++!release_if_reserved(CId) :
+        .my_name(Me) & shelf_reservation(Shelf, Me, W, V, CId) <-
+    !release_shelf(CId, Shelf, W, V).
++!release_if_reserved(_).
+
+// ═════════════════════════════════════════════════════════════
+//  RECUPERACIÓN: tengo un paquete en la mano y la tarea actual
+//  ha fallado. Best-effort: lo llevo a la zona de salida y allí
+//  lo dejo. El env notifica container_exited al scheduler/supervisor
+//  automáticamente. Si recover_carrying falla, sólo se loguea: el
+//  paquete podría seguir en la mano, pero al menos no propagamos
+//  el fallo y los siguientes ciclos pueden continuar.
+// ═════════════════════════════════════════════════════════════
++!recover_carrying : picked(CId) <-
+    .print("Recuperación: tengo ", CId, " en la mano — lo entrego en la salida");
+    !clear_nav_state;
+    !go_to_exit_cell(EX, EY);
+    drop_at_exit(EX, EY);
+    .print("Recuperación: ", CId, " entregado en la salida").
++!recover_carrying.
+
+-!recover_carrying <-
+    .print("AVISO: recuperación de paquete en mano no completó (puede quedar carrying)").
+
+// ═════════════════════════════════════════════════════════════
+//  FALLOS DE handle_container — limpieza segura
+//
+//  Cubre: pickup fallido (already_carrying / invalid_pick / too_far),
+//  navigate_to_shelf sin candidatas, query_location timeout, splash
+//  del propio contenedor objetivo, etc. Liberamos la reserva activa
+//  (si la tenemos), entregamos en la salida lo que llevemos en mano
+//  y volvemos a procesar la cola para no quedar bloqueados.
+// ═════════════════════════════════════════════════════════════
+-!handle_container(CId, _, _, _, _) <-
+    .print("AVISO: handle_container(", CId, ") falló — recupero estado");
+    !release_if_reserved(CId);
+    !recover_carrying;
+    .abolish(shelf_blacklist(_));
+    -+state(idle);
+    !process_next.
 
 // ═════════════════════════════════════════════════════════════
 //  CICLO DE SALIDA POR DEADLINES  (nuevo protocolo, autónomo)
@@ -863,7 +951,12 @@ can_i_exit(_,   at_entry(_,_)).
     }.
 
 -!execute_exit(CId, _, Type) <-
-    .print("Fallo el exit de ", CId);
+    .print("Fallo el exit de ", CId, " — recupero estado");
+    // Si el fallo nos pilla con el paquete en la mano (típicamente
+    // pickup ok pero navegación o drop_at_exit fallaron), best-effort
+    // de entrega antes de cerrar; así no quedamos "carrying" para los
+    // siguientes pickups (already_carrying).
+    !recover_carrying;
     .abolish(carrying_exit(CId, _, _, _, _));
     .send(scheduler, tell, exit_done(CId, Type));
     .abolish(exit_item(CId, _, _, _, _, _));
@@ -900,8 +993,8 @@ can_i_exit(_,   at_entry(_,_)).
     !reshelf_carried_dispatch(CId, Type, W, V, Chosen).
 
 +!reshelf_carried_dispatch(CId, Type, _, _, none) <-
-    .print("AVISO: sin shelf libre para re-almacenar ", CId, " — uso zona de procesamiento");
-    !drop_in_processing_zone(CId, Type);
+    .print("AVISO: sin shelf libre para re-almacenar ", CId, " — caso límite: salida directa + ciclo");
+    !force_exit_carried(CId, Type);
     .abolish(carrying_exit(CId, _, _, _, _));
     .abolish(exit_item(CId, _, _, _, _, _));
     -exit_in_progress(_);

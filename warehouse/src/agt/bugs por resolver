@@ -1,0 +1,23 @@
+
+ek origrana peta a los 20 mins aprox, estoy tratando de resolver bugs
+
+
+already carrying -> mirar cuando pasaba (no tan importante) si se documenta como error no resuelto
+
+no se activan 2 deadlines seguidos-> importante solucionar creo que es la causa (se encola deadline pero sin embargo nunca salta)
+
+cambios en la generacion (no tan importante)
+
+estanterias ignoradas saber porque (no tan importante)
+paquete en entrada ignorado (no tan importante)
+
+
+mejoras
+
+path finding mejorado(mala pinta, prioridad media)
+
+coordinacion general de salida (cuando terminan sus paquetes ayudar a otros robots) -> hacer siguiente
+
+
+corregir los broadcast (importante pero solo para que no nos toquen los cojones)
+

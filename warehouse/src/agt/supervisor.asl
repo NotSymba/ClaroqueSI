@@ -252,6 +252,15 @@ type_group(urgent,   urgent).
     .print("Supervisor: ", CId, " (", Type, ") ha salido del almacén");
     -container_exited(CId, Type, Weight, Volume).
 
+/* Contenedor aplastado por un robot — purgamos el registro en almacén para
+ * que el conteo de paquetes pendientes y los avisos de espacio sigan
+ * coherentes. No retiramos el dato de "recibido" porque sí entró en el
+ * sistema; sólo dejamos de contarlo como almacenable. */
++container_destroyed(CId, Type) <-
+    .abolish(at_warehouse(CId, _, _, _));
+    .print("Supervisor: ", CId, " (", Type, ") destruido por un robot — purgo registro");
+    -container_destroyed(CId, Type).
+
 +!maybe_unmark(Shelf, CurW, CurV, MaxW, MaxV) :
         near_full_ratio(R) &
         CurW < MaxW * R & CurV < MaxV * R &

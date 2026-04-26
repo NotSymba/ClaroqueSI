@@ -156,6 +156,28 @@ blocked_type(Type) :- type_group(Type, G) & blocked_group(G).
  * (más abajo). No se declara nada genérico aquí para que los guards de
  * fase (stored_phase / unstorable_phase) tengan prioridad. */
 
+/* ----------------------------------------------------------------------------
+ *  CONTENEDOR APLASTADO POR UN ROBOT (splash). El env destruye el paquete y
+ *  notifica a todos los agentes para que purguen referencias. Aquí limpiamos
+ *  todo el estado que el scheduler pudiera mantener sobre ese contenedor:
+ *  caché de info, anuncios pendientes, claims, exit_items publicados y la
+ *  cuenta de unstorable. También retiramos los exit_item / container_available
+ *  ya enviados a los robots (untell), por si el contenedor estaba en vuelo
+ *  para otro robot.
+ * -------------------------------------------------------------------------- */
++container_destroyed(CId, Type) <-
+    .print("Scheduler: contenedor ", CId, " (tipo ", Type, ") destruido — limpio referencias");
+    .abolish(package_info(CId, _, _, _));
+    .abolish(pending_announce(CId, _, _, _, _));
+    .abolish(claimed(CId));
+    .abolish(pending_exit(CId, _, _, _, _, _));
+    .abolish(container_at(CId, _, _));
+    !remove_from_unstorable(CId);
+    .broadcast(untell, exit_item(CId, _, _, _, _, _));
+    .broadcast(untell, container_available(CId, _, _, _, _));
+    .broadcast(untell, exit_taken(CId));
+    -container_destroyed(CId, Type).
+
 /* ============================================================================
  * COMPROBACIÓN DE ACCESIBILIDAD (sin cambios respecto a la versión anterior)
  * ============================================================================ */
@@ -293,6 +315,20 @@ unstorable_threshold(3).
     .print("Scheduler: umbral unstorable alcanzado para grupo ", Group, " — disparo ciclo");
     !begin_exit_cycle(Group).
 +!check_unstorable_threshold(_, _).
+
+/* Disparo forzado desde un robot: caso límite en el que un paquete ya
+ * recogido no encuentra shelf que lo acepte (típicamente por desajustes
+ * de sincronización o precisión). El robot deposita ese paquete en la
+ * zona de salida directamente y nos pide vaciar las estanterías del
+ * grupo afectado. */
++force_exit_cycle(Type)[source(_)] :
+        type_group(Type, Group) & not exit_cycle_active <-
+    .abolish(force_exit_cycle(_)[source(_)]);
+    .print("Scheduler: ciclo de salida forzado por robot (grupo ", Group, ") — caso límite");
+    !begin_exit_cycle(Group).
+
++force_exit_cycle(Type)[source(_)] <-
+    .abolish(force_exit_cycle(Type)[source(_)]).
 
 /* Disparador desde supervisor: 70 % de un tipo */
 +no_space(Type)[source(supervisor)] :

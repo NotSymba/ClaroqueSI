@@ -149,9 +149,6 @@ public class WarehouseArtifact extends Environment {
                 case "drop_at":
                     return executeDropAt(agName, action);
 
-                case "drop_in_processing":
-                    return executeDropInProcessing(agName, action);
-
                 case "drop_at_exit":
                     return executeDropAtExit(agName, action);
 
@@ -172,9 +169,6 @@ public class WarehouseArtifact extends Environment {
 
                 case "task_complete":
                     return executeTaskComplete(agName, action);
-
-                case "move_to_processing":
-                    return executeMoveToProcessing(agName, action);
 
                 case "relocate_container":
                     return executeRelocateContainer(agName, action);
@@ -290,22 +284,55 @@ public class WarehouseArtifact extends Environment {
             String destination = action.getTerm(0).toString() + "," + action.getTerm(1).toString();
 
             if (error == 0) {
-                removePerceptsByUnif(agName, Literal.parseLiteral("error(_,_)"));
-                viewAct(String.format("%s moved to (%s)", agName, destination));
+                // El paso físico funcionó. Comprobamos si la celda destino tenía
+                // un paquete sin recoger: en ese caso lo destruimos, notificamos
+                // a todos los agentes para que limpien referencias y devolvemos
+                // ÉXITO igualmente — el robot se ha movido y no debe perder la
+                // intención de seguir navegando por un splash accidental.
+                Container crushed = model.escacharPaquete(agName);
+                if (crushed != null) {
+                    broadcastContainerDestroyed(crushed);
+                    addError(agName, "splash_container",
+                            "Robot crushed " + crushed.getId() + " at " + destination);
+                    viewAct(String.format("%s crushed %s at (%s)", agName, crushed.getId(), destination));
+                } else {
+                    removePerceptsByUnif(agName, Literal.parseLiteral("error(_,_)"));
+                    viewAct(String.format("%s moved to (%s)", agName, destination));
+                }
                 return true;
             } else if (error == 3) {
                 addError(agName, "blocked_by_agent", "Path blocked by another agent at " + destination);
                 return true; // El agente puede replanificar
-            } else if (error == 5) {
-                addError(agName, "splash_container", "Robot stepped on a container at " + destination);
-                return false;
             } else {
-                addError(agName, "unknown", "Unknown error code: " + error);
+                addError(agName, "unknown_Steap", "Unknown error code: " + error);
                 return false;
             }
         } finally {
             removePerceptsByUnif(agName, Literal.parseLiteral("at(_,_,_)"));
             updatePercepts(agName);
+        }
+    }
+
+    /**
+     * Notifica la destrucción de un contenedor a TODOS los agentes (scheduler,
+     * supervisor y los 4 robots) y limpia las percepciones asociadas en el
+     * scheduler (container_at, occupied). Cada agente reaccionará a
+     * container_destroyed/2 para purgar sus colas, reservas y referencias.
+     */
+    private void broadcastContainerDestroyed(Container c) {
+        String cid = c.getId();
+        String type = c.getType();
+
+        // Percepciones que el env mantenía sobre el contenedor
+        removePerceptsByUnif("scheduler",
+                Literal.parseLiteral("container_at(" + cid + ",_,_)"));
+        updateOccupancy(c.getX(), c.getY(), false);
+
+        Literal lit = Literal.parseLiteral("container_destroyed(" + cid + "," + type + ")");
+        addPercept("scheduler", lit);
+        addPercept("supervisor", lit);
+        for (String robotName : model.getRobots().keySet()) {
+            addPercept(robotName, lit);
         }
     }
 
@@ -333,40 +360,6 @@ public class WarehouseArtifact extends Environment {
             addError(agName, "already_carrying", "Robot is already carrying something");
         } else if (error == 3) {
             addError(agName, "too_far", "Container too far away: " + containerId);
-        }
-        return false;
-    }
-
-    /**
-     * Acción: move_to_processing(ContainerId, DestX, DestY) Mueve un paquete de
-     * la zona de entrada a la zona de clasificación. Restaura la celda origen a
-     * ENTRANCE y marca la destino como PACKAGE.
-     */
-    private boolean executeMoveToProcessing(String agName, Structure action) {
-        String containerId = action.getTerm(0).toString().replace("\"", "");
-        Container container = model.getContainers().get(containerId);
-        int preX = container != null ? container.getX() : -1;
-        int preY = container != null ? container.getY() : -1;
-        int error = model.moveToProcessing(agName, action);
-
-        if (error == 0) {
-            viewAct(String.format("%s moved container %s to processing zone", agName, containerId));
-            updateOccupancy(preX, preY, false);
-            if (container != null) {
-                updateOccupancy(container.getX(), container.getY(), true);
-                updateContainerAt(containerId, container.getX(), container.getY());
-            }
-            return true;
-        } else if (error == 1) {
-            addError(agName, "invalid_move", "Robot or container not found: " + containerId);
-        } else if (error == 2) {
-            addError(agName, "already_picked", "Container already picked or not in entrance: " + containerId);
-        } else if (error == 3) {
-            addError(agName, "dest_occupied", "Destination cell is not a free classification cell");
-        } else if (error == 4) {
-            addError(agName, "dest_out_of_bounds", "Destination is outside classification zone");
-        } else {
-            addError(agName, "unknown", "Unexpected error moving container " + containerId);
         }
         return false;
     }
@@ -414,7 +407,7 @@ public class WarehouseArtifact extends Environment {
         } else if (error == 4) {
             addError(agName, "dest_out_of_bounds", "Destination is outside classification zone");
         } else {
-            addError(agName, "unknown", "Unexpected error relocating container " + containerId);
+            addError(agName, "unknown_Recolocate", "Unexpected error relocating container " + containerId);
         }
         return false;
     }
@@ -479,49 +472,7 @@ public class WarehouseArtifact extends Environment {
         } else if (error == 5) {
             addError(agName, "too_far", "Robot not adjacent to exit cell");
         } else {
-            addError(agName, "unknown", "Unexpected error dropping at exit");
-        }
-        return false;
-    }
-
-    /**
-     * Acción: drop_in_processing(DestX, DestY)
-     */
-    private boolean executeDropInProcessing(String agName, Structure action) {
-        Robot robot = model.getRobots().get(agName);
-        Container carried = robot != null ? robot.getCarriedContainer() : null;
-        String cid = carried != null ? carried.getId() : "?";
-        String type = carried != null ? carried.getType() : "?";
-
-        int error = model.dropAtProcessing(agName, action);
-
-        if (error == 0) {
-            int destX = carried.getX();
-            int destY = carried.getY();
-            viewAct(String.format("%s dropped %s in processing zone at (%d,%d)", agName, cid, destX, destY));
-            removePerceptsByUnif(agName, Literal.parseLiteral("picked(_)"));
-            
-            // Updates occupancy for the scheduler
-            updateOccupancy(destX, destY, true);
-            updateContainerAt(cid, destX, destY);
-            
-            // Notify scheduler it's unstorable!
-            addPercept("scheduler", Literal.parseLiteral(
-                    "unstorable(" + cid + "," + type + ")"));
-                    
-            return true;
-        } else if (error == 1) {
-            addError(agName, "invalid_drop", "Robot not found");
-        } else if (error == 2) {
-            addError(agName, "not_carrying", "Robot is not carrying anything");
-        } else if (error == 3) {
-            addError(agName, "not_empty_classification", "Destination is not an empty classification cell");
-        } else if (error == 4) {
-            addError(agName, "out_of_bounds", "Destination outside classification zone");
-        } else if (error == 5) {
-            addError(agName, "too_far", "Robot not adjacent to classification cell");
-        } else {
-            addError(agName, "unknown", "Unexpected error dropping in processing");
+            addError(agName, "unknown_DropAt", "Unexpected error dropping at exit");
         }
         return false;
     }
@@ -560,7 +511,7 @@ public class WarehouseArtifact extends Environment {
         } else if (error == 5) {
             addError(agName, "cannot_carry", "Robot cannot carry container " + containerId);
         } else {
-            addError(agName, "unknown", "Unexpected error retrieving " + containerId);
+            addError(agName, "unknown_Retrive", "Unexpected error retrieving " + containerId);
         }
         return false;
     }
