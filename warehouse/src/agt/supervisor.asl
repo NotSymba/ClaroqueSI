@@ -31,6 +31,11 @@ max_consecutive_errors(100).
 total_received(0).
 total_stored(0).
 
+/* Contador de incumplimientos de deadline. Cada vez que la auditoría
+ * temporal detecta que al expirar el deadline siguen existiendo
+ * contenedores de los tipos vigentes sin entregar, lo incrementamos. */
+deadline_violations(0).
+
 /* ============================================================================
  * TOPOLOGÍA DE ESTANTERÍAS
  *   shelf_capacity(Id, MaxWeight, MaxVolume)
@@ -105,6 +110,7 @@ type_group(urgent,   urgent).
  * ============================================================================ */
 
 +package_arrived(CId, Weight, Volume, Type)[source(scheduler)] <-
+    +at_warehouse(CId, Type, Weight, Volume);
     .print("Supervisor: registrado ", CId, " peso=", Weight, " vol=", Volume, " tipo=", Type);
     -package_arrived(CId, Weight, Volume, Type)[source(scheduler)].
 
@@ -242,6 +248,7 @@ type_group(urgent,   urgent).
     -package_retrieved(CId, Shelf, Weight, Volume).
 
 +container_exited(CId, Type, Weight, Volume) <-
+    .abolish(at_warehouse(CId, _, _, _));
     .print("Supervisor: ", CId, " (", Type, ") ha salido del almacén");
     -container_exited(CId, Type, Weight, Volume).
 
@@ -349,3 +356,51 @@ type_group(urgent,   urgent).
     //.stopMAS.
 
 +!check_stop(_) : true <- true.
+
+/* ============================================================================
+ * VIGILANCIA TEMPORAL DE DEADLINES
+ *
+ *   El scheduler nos avisa con tell deadline_started(Kind, Types, Duration)
+ *   cuando arranca un deadline (T0). Lanzamos un plan que espera Duration ms
+ *   y, al despertar, audita qué contenedores de Types siguen en el almacén
+ *   (creencia at_warehouse/4). Cada contenedor pendiente se registra como un
+ *   incumplimiento informativo. NO detiene el sistema ni interrumpe a los
+ *   robots: la sanción de no llevar nada a salida cuando expira el deadline
+ *   la aplican los propios robots (ver work.asl: chequean active_deadline
+ *   antes de drop_at_exit).
+ * ============================================================================ */
+
++deadline_started(Kind, Types, Duration)[source(scheduler)] <-
+    -deadline_started(Kind, Types, Duration)[source(scheduler)];
+    .print("Supervisor: arranco vigilancia temporal de deadline ", Kind,
+           " (tipos=", Types, ", duración=", Duration, "ms)");
+    !watch_deadline(Kind, Types, Duration).
+
++!watch_deadline(Kind, Types, Duration) <-
+    .wait(Duration);
+    !audit_deadline(Kind, Types).
+
++!audit_deadline(Kind, Types) <-
+    .findall(p(CId, Ty),
+             (at_warehouse(CId, Ty, _, _) & .member(Ty, Types)),
+             Pending);
+    .length(Pending, N);
+    !report_audit(Kind, Types, N, Pending).
+
++!report_audit(Kind, _, 0, _) <-
+    .print("Supervisor: deadline ", Kind, " cumplido (sin pendientes)").
+
++!report_audit(Kind, Types, N, Pending) :
+        deadline_violations(K) <-
+    .abolish(deadline_violations(_));
+    +deadline_violations(K + 1);
+    .time(HH, MM, SS);
+    .print("==========================================================");
+    .print("ERROR INFORMATIVO | deadline=", Kind, " | tipos=", Types);
+    .print("  Contenedores sin entregar al expirar: ", N);
+    .print("  Lista: ", Pending);
+    .print("  Total incumplimientos acumulados: ", K + 1);
+    .print("EVENT | time=", HH, ":", MM, ":", SS,
+           " | agent=supervisor | type=deadline_violation | data=",
+           Kind, "/", N);
+    .print("==========================================================").

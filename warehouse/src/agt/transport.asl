@@ -9,7 +9,7 @@
  *   container_shipped(CId, Type)         → contenedor cargado en el camión
  *   load_end(DeadlineKind, Count)        → el camión se va con N contenedores
  ******************************************************************************/
-
+total_salidas(0).
 !start.
 
 +!start <-
@@ -17,12 +17,14 @@
 
 +load_start(Kind, Types)[source(scheduler)] <-
     .print("Transport: preparando carga '", Kind, "' para tipos ", Types);
-    -load_start(Kind, Types)[source(scheduler)].
+    .abolish(load_start(Kind, Types)[source(scheduler)]).
 
 +container_shipped(CId, Type)[source(scheduler)] <-
     .print("Transport: cargado ", CId, " (", Type, ")");
-    -container_shipped(CId, Type)[source(scheduler)].
+    .abolish(container_shipped(CId, Type)[source(scheduler)]).
 
-+load_end(Kind, N)[source(scheduler)] <-
++load_end(Kind, N)[source(scheduler)] : total_salidas(T)<-
     .print("Transport: sale el camión de '", Kind, "' con ", N, " contenedores");
-    -load_end(Kind, N)[source(scheduler)].
+    .abolish(load_end(Kind, N)[source(scheduler)]);
+    -total_salidas(T);
+    +total_salidas(T+1).

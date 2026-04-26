@@ -569,19 +569,29 @@ shelf_usage_local(shelf_9, 0, 0).
     drop_in_processing;
     .print("Paquete ", CId, " dejado en zona de procesamiento (invalido/unstorable).").
 
-+!finish_task(CId, Shelf) <-
+// Caso normal: la reserva sigue ahí (no hubo purga por deadline en medio).
++!finish_task(CId, Shelf) :
+        .my_name(Me) & shelf_reservation(Shelf, Me, W, V, CId) <-
     task_complete(CId, Shelf);
-    .my_name(Me);
-    ?shelf_reservation(Shelf, Me, W, V, CId);
     !commit_shelf(CId, Shelf, W, V);
     .send(scheduler, tell, guardado(CId, Shelf));
-    // Memoria local de ownership + dimensiones, para el ciclo de salida:
-    // el retrieve necesita saber (W, V) para actualizar usage local.
     +my_stored(CId, Shelf, W, V);
-    // Depositado OK → limpiamos blacklist de fallos puntuales.
     .abolish(shelf_blacklist(_));
     -+state(idle);
     .print("Completado: ", CId, " → ", Shelf);
+    !process_next.
+
+// Reserva desaparecida (típicamente purgada al arrancar un deadline sobre
+// esta shelf justo mientras estábamos de viaje). El drop ya se realizó,
+// así que notificamos guardado al scheduler pero NO hacemos commit_shelf
+// (no tenemos W,V fiables aquí y el supervisor es la fuente autoritativa).
++!finish_task(CId, Shelf) <-
+    .print("AVISO: finish_task sin shelf_reservation para ", CId, " en ", Shelf,
+           " — probable purga por deadline; envío guardado sin commit local");
+    task_complete(CId, Shelf);
+    .send(scheduler, tell, guardado(CId, Shelf));
+    .abolish(shelf_blacklist(_));
+    -+state(idle);
     !process_next.
 
 // ─────────────────────────────────────────────────────────────
@@ -642,13 +652,49 @@ can_i_exit(_,   at_entry(_,_)).
     .abolish(exit_item(CId, _, _, _, _, _));
     -exit_taken(CId)[source(scheduler)].
 
-// Inicio/fin de deadline: sólo informativo + intento de despertar
-+active_deadline(Kind)[source(scheduler)] <-
-    .print("Robot: deadline activo ", Kind);
+// Inicio/fin de deadline.
+//
+// Al ARRANCAR un deadline purgamos localmente todas las shelf_reservation
+// cuyo shelf pertenezca al grupo que va a salir:
+//   short → urgent_shelf   (S1, S5, S8)
+//   long  → regular_shelf  (S2..S4, S6, S7, S9)
+//
+// Motivo: a veces quedan reservas huérfanas de operaciones abortadas
+// (pickup fallido, navegación interrumpida, crash mid-flight...) que
+// siguen contando como "pre-reserva" en shelf_fits y falsean el hueco
+// disponible. El deadline es el momento natural para limpiar: los
+// paquetes de ese tipo van a salir igualmente, así que cualquier reserva
+// pendiente sobre esas shelves es basura.
++active_deadline(short)[source(scheduler)] <-
+    .print("Robot: deadline short activo — purgo reservas en urgent shelves");
+    !purge_reservations_urgent;
+    !check_idle.
+
++active_deadline(long)[source(scheduler)] <-
+    .print("Robot: deadline long activo — purgo reservas en regular shelves");
+    !purge_reservations_regular;
     !check_idle.
 
 -active_deadline(Kind)[source(scheduler)] <-
     .print("Robot: deadline ", Kind, " cerrado").
+
++!purge_reservations_urgent <-
+    .findall(sr(S, O, W, V, CId),
+             (shelf_reservation(S, O, W, V, CId) & urgent_shelf(S)),
+             L);
+    !drop_reservation_list(L).
+
++!purge_reservations_regular <-
+    .findall(sr(S, O, W, V, CId),
+             (shelf_reservation(S, O, W, V, CId) & regular_shelf(S)),
+             L);
+    !drop_reservation_list(L).
+
++!drop_reservation_list([]).
++!drop_reservation_list([sr(S, O, W, V, CId) | Rest]) <-
+    .print("  purga shelf_reservation(", S, ",", O, ",", W, ",", V, ",", CId, ")");
+    -shelf_reservation(S, O, W, V, CId);
+    !drop_reservation_list(Rest).
 
 // ─── Selección del mejor exit_item + lock atómico ───────────
 //  Mejor = más cercano entre los que puedo cargar (Manhattan).
@@ -743,43 +789,158 @@ can_i_exit(_,   at_entry(_,_)).
 +claim_result(_, _)[source(scheduler)] <-
     .abolish(claim_result(_, _)[source(scheduler)]).
 
+// ─────────────────────────────────────────────────────────────
+//  EXIT CON GUARDAS DE DEADLINE
+//
+//  Antes de retrieve/pickup y antes de drop_at_exit comprobamos que
+//  active_deadline(_) sigue vigente. Si el scheduler ya cerró el
+//  deadline (untell active_deadline) NO podemos llevar el paquete
+//  a salida — es exactamente el caso prohibido por el spec.
+//
+//  · Si el deadline expira ANTES del retrieve/pickup → abandono
+//    limpio. El paquete se queda donde estaba (shelf o entrada) y
+//    se intentará en el próximo deadline del mismo grupo.
+//  · Si el deadline expira CON paquete en mano → re-almaceno en una
+//    estantería compatible (puede ser la original u otra). El paquete
+//    quedará disponible en el siguiente deadline del mismo grupo vía
+//    stored_at del supervisor.
+//
+//  carrying_exit/5 marca "tengo paquete del ciclo de salida en la
+//  mano" entre el retrieve/pickup y el drop_at_exit (o re-shelf).
+// ─────────────────────────────────────────────────────────────
 +!execute_exit(CId, at_shelf(Shelf), Type) <-
     .print("Exit de ", CId, " desde shelf ", Shelf);
     !navigate_to_shelf(Shelf);
-    retrieve(CId);
-    // Actualizo mi usage local y se lo comunico a los otros robots.
-    ?my_stored(CId, Shelf, W, V);
-    -my_stored(CId, Shelf, W, V);
-    !retrieved_shelf(CId, Shelf, W, V);
-    !go_to_exit_cell(EX, EY);
-    drop_at_exit(EX, EY);
-    .send(scheduler, tell, exit_done(CId, Type));
-    .abolish(exit_item(CId, _, _, _, _, _));
-    -exit_in_progress(_);
-    -+state(idle);
-    .print("Exit completo: ", CId);
-    !process_next.
+    if (not active_deadline(_)) {
+        .print("Deadline cerrado antes de retrieve de ", CId, " — abandono exit");
+        !abort_exit_cleanup(CId)
+    } else {
+        retrieve(CId);
+        ?my_stored(CId, Shelf, W, V);
+        -my_stored(CId, Shelf, W, V);
+        !retrieved_shelf(CId, Shelf, W, V);
+        +carrying_exit(CId, Type, Shelf, W, V);
+        !go_to_exit_cell(EX, EY);
+        if (not active_deadline(_)) {
+            .print("Deadline cerrado durante traslado a salida con ", CId, " — re-almaceno");
+            !reshelf_carried(CId, Type, Shelf, W, V)
+        } else {
+            drop_at_exit(EX, EY);
+            .abolish(carrying_exit(CId, _, _, _, _));
+            .send(scheduler, tell, exit_done(CId, Type));
+            .abolish(exit_item(CId, _, _, _, _, _));
+            -exit_in_progress(_);
+            -+state(idle);
+            .print("Exit completo: ", CId);
+            !process_next
+        }
+    }.
 
 +!execute_exit(CId, at_entry(X, Y), Type) <-
     .print("Exit directo de ", CId, " desde entrada (", X, ",", Y, ")");
     !goto_pos(CId, X, Y);
-    pickup(CId);
-    !go_to_exit_cell(EX, EY);
-    drop_at_exit(EX, EY);
-    .send(scheduler, tell, exit_done(CId, Type));
-    .abolish(exit_item(CId, _, _, _, _, _));
-    -exit_in_progress(_);
-    -+state(idle);
-    .print("Exit directo completo: ", CId);
-    !process_next.
+    if (not active_deadline(_)) {
+        .print("Deadline cerrado antes de pickup de ", CId, " — abandono exit");
+        !abort_exit_cleanup(CId)
+    } else {
+        pickup(CId);
+        !get_exit_dim(CId, EW, EV);
+        +carrying_exit(CId, Type, none, EW, EV);
+        !go_to_exit_cell(EX, EY);
+        if (not active_deadline(_)) {
+            .print("Deadline cerrado durante traslado a salida con ", CId, " — re-almaceno");
+            !reshelf_carried(CId, Type, none, EW, EV)
+        } else {
+            drop_at_exit(EX, EY);
+            .abolish(carrying_exit(CId, _, _, _, _));
+            .send(scheduler, tell, exit_done(CId, Type));
+            .abolish(exit_item(CId, _, _, _, _, _));
+            -exit_in_progress(_);
+            -+state(idle);
+            .print("Exit directo completo: ", CId);
+            !process_next
+        }
+    }.
 
 -!execute_exit(CId, _, Type) <-
     .print("Fallo el exit de ", CId);
+    .abolish(carrying_exit(CId, _, _, _, _));
     .send(scheduler, tell, exit_done(CId, Type));
     .abolish(exit_item(CId, _, _, _, _, _));
     -exit_in_progress(_);
     -+state(idle);
     !process_next.
+
+// ─────────────────────────────────────────────────────────────
+//  ABANDONO LIMPIO (deadline expiró antes de retrieve/pickup)
+//  El paquete se queda donde estaba: el siguiente deadline del
+//  mismo grupo lo volverá a publicar (stored_at o unstorable_pending).
+// ─────────────────────────────────────────────────────────────
++!abort_exit_cleanup(CId) <-
+    .abolish(pending_claim(CId, _, _));
+    .abolish(exit_item(CId, _, _, _, _, _));
+    .abolish(carrying_exit(CId, _, _, _, _));
+    -exit_in_progress(_);
+    -+state(idle);
+    !process_next.
+
+// ─────────────────────────────────────────────────────────────
+//  RE-ALMACENAMIENTO TRAS FIN DE DEADLINE (paquete en mano)
+//
+//  Reutilizamos choose_shelf_local para encontrar una estantería
+//  compatible con el tipo (urgente o regular) y con hueco. La
+//  shelf elegida puede ser la original (si todavía cabe, lo
+//  natural) u otra. Tras el drop_at se hace commit + guardado al
+//  scheduler como en el flujo de almacenamiento normal, dejando
+//  my_stored para que el robot pueda retirarlo en el próximo
+//  deadline del mismo grupo.
+// ─────────────────────────────────────────────────────────────
++!reshelf_carried(CId, Type, _, W, V) <-
+    !choose_shelf_local(CId, Type, W, V, Chosen);
+    !reshelf_carried_dispatch(CId, Type, W, V, Chosen).
+
++!reshelf_carried_dispatch(CId, Type, _, _, none) <-
+    .print("AVISO: sin shelf libre para re-almacenar ", CId, " — uso zona de procesamiento");
+    !drop_in_processing_zone(CId, Type);
+    .abolish(carrying_exit(CId, _, _, _, _));
+    .abolish(exit_item(CId, _, _, _, _, _));
+    -exit_in_progress(_);
+    -+state(idle);
+    !process_next.
+
++!reshelf_carried_dispatch(CId, _, W, V, Shelf) <-
+    !reserve_shelf(CId, Shelf, W, V);
+    !navigate_to_shelf(Shelf);
+    !try_reshelf_drop(CId, W, V, Shelf).
+
++!try_reshelf_drop(CId, W, V, Shelf) <-
+    drop_at(Shelf);
+    .print("Re-almacenado ", CId, " en ", Shelf, " (deadline expiró durante salida)");
+    !commit_shelf(CId, Shelf, W, V);
+    .send(scheduler, tell, guardado(CId, Shelf));
+    +my_stored(CId, Shelf, W, V);
+    .abolish(carrying_exit(CId, _, _, _, _));
+    .abolish(exit_item(CId, _, _, _, _, _));
+    .abolish(shelf_blacklist(_));
+    -exit_in_progress(_);
+    -+state(idle);
+    !process_next.
+
+-!try_reshelf_drop(CId, W, V, Shelf) <-
+    .print("Fallo re-almacenamiento ", CId, " en ", Shelf, " — pruebo otra");
+    !release_shelf(CId, Shelf, W, V);
+    +shelf_blacklist(Shelf);
+    ?carrying_exit(CId, Type, OrigShelf, _, _);
+    !reshelf_carried(CId, Type, OrigShelf, W, V).
+
+// Lee W, V del exit_item local (todavía presente porque aún no lo
+// hemos abolido). Si por alguna razón ya no está, devolvemos 0,0
+// para que reshelf_carried elija una shelf que admita "cualquier"
+// tamaño (las urgent shelves más pequeñas tienen 50/8, suficiente
+// para la mayoría de paquetes pequeños/medianos).
++!get_exit_dim(CId, W, V) : exit_item(CId, _, EW, EV, _, _) <-
+    W = EW; V = EV.
++!get_exit_dim(_, 0, 0).
 
 // Elige una celda libre de la zona de salida y navega adyacente a ella.
 // Reutiliza sort_by_distance de mov.asl (lista de pos(X,Y)).

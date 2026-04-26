@@ -268,7 +268,7 @@ unstorable_threshold(3).
 /* Registro de unstorable (sigue siendo por GRUPO para que al disparar el ciclo
  * tengamos la lista de pendientes del grupo adecuado). */
 +unstorable(CId, Type)[source(_)] <-
-    -unstorable(CId, Type)[source(_)];
+    .abolish(unstorable(CId, Type)[source(_)]);
     ?type_group(Type, Group);
     !record_unstorable(CId, Group).
 
@@ -370,6 +370,10 @@ unstorable_threshold(3).
     +active_deadline(Kind);
     +deadline_shipped_count(Kind, 0);
     .send(transport, tell, load_start(Kind, Types));
+    // Supervisor arranca su propia vigilancia temporal del deadline. Al expirar
+    // Duration audita los contenedores de Types que sigan en el almacén y
+    // registra un error informativo si quedaron pendientes sin entregar.
+    .send(supervisor, tell, deadline_started(Kind, Types, Duration));
     !broadcast_deadline_start(Kind);
     !publish_stored_items(Types, Kind);
     !publish_unstorable_items(Types, Kind);
@@ -535,7 +539,9 @@ unstorable_threshold(3).
 +!end_exit_cycle(TriggerGroup) <-
     -exit_cycle_active;
     -trigger_group(_);
-    .abolish(unstorable_pending(_, _));
+    // NO abolimos unstorable_pending: exit_done ya quitó los entregados,
+    // así que lo que queda son paquetes que NO salieron en este ciclo y
+    // deben volver a publicarse en el siguiente deadline del mismo grupo.
     !unblock_group(TriggerGroup);
     .send(supervisor, tell, exit_cycle_ended(TriggerGroup));
     .print("Scheduler: FIN ciclo de salida (trigger=", TriggerGroup, ")");
