@@ -399,12 +399,18 @@ shelf_usage_local(shelf_9, 0, 0).
 +!reserve_shelf(CId, Shelf, W, V) <-
     .my_name(Me);
     +shelf_reservation(Shelf, Me, W, V, CId);
+    // pending_drop SOBREVIVE a la purga de reservas que dispara
+    // active_deadline. Es la única fuente de W,V con la que el
+    // catch-all de finish_task puede reconstruir my_stored y mantener
+    // can_i_exit(at_shelf) operativo en el siguiente deadline.
+    +pending_drop(CId, Shelf, W, V);
     .print("Reservo ", Shelf, " para ", CId, " (w=", W, ", v=", V, ")");
     !peer_broadcast(shelf_reserve(CId, Shelf, W, V)).
 
 +!release_shelf(CId, Shelf, W, V) <-
     .my_name(Me);
     -shelf_reservation(Shelf, Me, W, V, CId);
+    -pending_drop(CId, Shelf, W, V);
     .print("Libero reserva ", Shelf, " de ", CId);
     !peer_broadcast(shelf_release(CId, Shelf, W, V)).
 
@@ -420,6 +426,7 @@ shelf_usage_local(shelf_9, 0, 0).
 +!commit_shelf(CId, Shelf, W, V) <-
     .my_name(Me);
     -shelf_reservation(Shelf, Me, W, V, CId);
+    -pending_drop(CId, Shelf, W, V);
     !update_usage_local(Shelf, W, V);
     !peer_broadcast(shelf_commit(CId, Shelf, W, V)).
 
@@ -590,13 +597,31 @@ shelf_usage_local(shelf_9, 0, 0).
     .print("Completado: ", CId, " → ", Shelf);
     !process_next.
 
-// Reserva desaparecida (típicamente purgada al arrancar un deadline sobre
-// esta shelf justo mientras estábamos de viaje). El drop ya se realizó,
-// así que notificamos guardado al scheduler pero NO hacemos commit_shelf
-// (no tenemos W,V fiables aquí y el supervisor es la fuente autoritativa).
+// Reserva desaparecida pero pending_drop sobrevive: la purga del deadline
+// borra shelf_reservation, no pending_drop. Reconstruimos W,V de ahí y
+// hacemos commit_shelf normal (sincroniza shelf_usage_local local + peers
+// vía broadcast) y AÑADIMOS my_stored — esto es CRÍTICO: sin my_stored el
+// próximo deadline emitirá exit_item(at_shelf,...) sin que nadie pase
+// can_i_exit, dejando el paquete huérfano para siempre en la estantería.
++!finish_task(CId, Shelf) :
+        pending_drop(CId, Shelf, W, V) <-
+    .print("RECUPERACIÓN: reserva purgada por deadline para ", CId,
+           " — recupero W=", W, " V=", V, " de pending_drop");
+    task_complete(CId, Shelf);
+    !commit_shelf(CId, Shelf, W, V);
+    .send(scheduler, tell, guardado(CId, Shelf));
+    +my_stored(CId, Shelf, W, V);
+    .abolish(shelf_blacklist(_));
+    -+state(idle);
+    !process_next.
+
+// Caso patológico: ni reserva ni pending_drop. No deberíamos llegar aquí
+// salvo bug. Notificamos guardado para no perder la pista en el supervisor,
+// pero el paquete quedará huérfano (sin my_stored → no se podrá retirar
+// salvo por delegación de ayuda de un peer que tampoco tiene).
 +!finish_task(CId, Shelf) <-
-    .print("AVISO: finish_task sin shelf_reservation para ", CId, " en ", Shelf,
-           " — probable purga por deadline; envío guardado sin commit local");
+    .print("AVISO GRAVE: finish_task sin reserva NI pending_drop para ", CId,
+           " en ", Shelf, " — paquete potencialmente huérfano");
     task_complete(CId, Shelf);
     .send(scheduler, tell, guardado(CId, Shelf));
     .abolish(shelf_blacklist(_));
@@ -643,6 +668,7 @@ shelf_usage_local(shelf_9, 0, 0).
     .abolish(my_stored(CId, _, _, _));
     .abolish(delegated_stored(CId, _, _, _));
     .abolish(delegating(CId));
+    .abolish(pending_drop(CId, _, _, _));
     !release_if_reserved(CId);
     -container_destroyed(CId, _).
 
