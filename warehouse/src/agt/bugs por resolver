@@ -1,12 +1,14 @@
-
-ek origrana peta a los 20 mins aprox, estoy tratando de resolver bugs
+a los 25 mins dejaron de ir a los contenedores de sus estanterias (solo recogian los que estaban en la entrada)
 
 
 already carrying -> mirar cuando pasaba (no tan importante) si se documenta como error no resuelto
+ (se encola deadline pero sin embargo nunca salta)
 
-no se activan 2 deadlines seguidos-> importante solucionar creo que es la causa (se encola deadline pero sin embargo nunca salta)
+cambios en la generacion (no tan importante) (borrado de paquetes que no se gestionan)
 
-cambios en la generacion (no tan importante)
+------------------------------------------------------------
+perdida de la intencion ante error unknown  ->
+------------------------------------------------------------
 
 estanterias ignoradas saber porque (no tan importante)
 paquete en entrada ignorado (no tan importante)

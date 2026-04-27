@@ -287,6 +287,18 @@ delta_t(30000).  // ΔT en milisegundos
 
 unstorable_threshold(3).
 
+/* Cola FIFO de deadlines pendientes mientras hay uno activo. Se rellena
+ * cuando llega un trigger (no_space, umbral unstorable, force_exit_cycle)
+ * con exit_cycle_active=true. Al cerrar el deadline activo, !end_exit_cycle
+ * dispara !chain_or_release que extrae el primer Group encolado y arranca
+ * INMEDIATAMENTE otro ciclo SIN liberar exit_cycle_active (así no se cuela
+ * un trigger nuevo entre medias). Sólo se libera cuando la cola queda vacía.
+ *
+ * Dedup: no se encola dos veces el mismo Group ni se encola el grupo del
+ * deadline en curso (sería redundante y chocaría con la guarda de supervisor
+ * blocked_group_notified). */
+pending_queue([]).
+
 /* Registro de unstorable (sigue siendo por GRUPO para que al disparar el ciclo
  * tengamos la lista de pendientes del grupo adecuado). */
 +unstorable(CId, Type)[source(_)] <-
@@ -314,7 +326,26 @@ unstorable_threshold(3).
         unstorable_threshold(T) & N >= T & not exit_cycle_active <-
     .print("Scheduler: umbral unstorable alcanzado para grupo ", Group, " — disparo ciclo");
     !begin_exit_cycle(Group).
++!check_unstorable_threshold(Group, N) :
+        unstorable_threshold(T) & N >= T & exit_cycle_active <-
+    .print("Scheduler: umbral unstorable alcanzado para grupo ", Group,
+           " durante ciclo activo — encolando");
+    !enqueue_pending(Group).
 +!check_unstorable_threshold(_, _).
+
+/* ---------------------------------------------------------------------------
+ *  COLA DE DEADLINES PENDIENTES (FIFO + dedup)
+ * ------------------------------------------------------------------------- */
++!enqueue_pending(Group) : trigger_group(Group) <-
+    .print("Scheduler: ", Group, " es ya el deadline en curso — descarto trigger duplicado").
+
++!enqueue_pending(Group) : pending_queue(Q) & .member(Group, Q) <-
+    .print("Scheduler: ", Group, " ya estaba en la cola pendiente — no duplico").
+
++!enqueue_pending(Group) : pending_queue(Q) <-
+    .concat(Q, [Group], NewQ);
+    -+pending_queue(NewQ);
+    .print("Scheduler: encolado deadline ", Group, " (cola pendiente = ", NewQ, ")").
 
 /* Disparo forzado desde un robot: caso límite en el que un paquete ya
  * recogido no encuentra shelf que lo acepte (típicamente por desajustes
@@ -327,6 +358,12 @@ unstorable_threshold(3).
     .print("Scheduler: ciclo de salida forzado por robot (grupo ", Group, ") — caso límite");
     !begin_exit_cycle(Group).
 
++force_exit_cycle(Type)[source(_)] :
+        type_group(Type, Group) & exit_cycle_active <-
+    .abolish(force_exit_cycle(_)[source(_)]);
+    .print("Scheduler: force_exit_cycle(", Type, ") durante ciclo activo — encolando ", Group);
+    !enqueue_pending(Group).
+
 +force_exit_cycle(Type)[source(_)] <-
     .abolish(force_exit_cycle(Type)[source(_)]).
 
@@ -337,34 +374,51 @@ unstorable_threshold(3).
     -no_space(Type)[source(supervisor)];
     !begin_exit_cycle(Group).
 
++no_space(Type)[source(supervisor)] :
+        type_group(Type, Group) & exit_cycle_active <-
+    .print("Scheduler: supervisor avisa no_space(", Type,
+           ") durante ciclo activo — encolando grupo ", Group);
+    -no_space(Type)[source(supervisor)];
+    !enqueue_pending(Group).
+
 +no_space(Type)[source(supervisor)] <-
     -no_space(Type)[source(supervisor)].
 
 /* ---------------------------------------------------------------------------
- *  Arranque del ciclo (T0) — REACTIVO, NO SECUENCIAL.
+ *  Arranque del ciclo (T0) — REACTIVO + COLA DE PENDIENTES.
  *
  *  Un disparo activa UN ÚNICO deadline, el del grupo afectado:
  *     - urgent  → deadline CORTO  (ΔT,  solo urgentes, shelves S1/S5/S8)
  *     - normal  → deadline LARGO  (2ΔT, standard+fragile, resto de shelves)
  *
- *  NO se encadenan. Si al terminar el supervisor sigue detectando saturación
- *  en el otro grupo, emitirá su propio no_space y dispararemos un nuevo ciclo
- *  con ese grupo. Así cada deadline responde a una condición real y no a un
- *  calendario ciego.
+ *  Sólo puede haber UN deadline activo en cada momento (exit_cycle_active es
+ *  el lock). Si llega un trigger mientras hay otro deadline en curso, NO se
+ *  pierde: se encola en pending_queue (con dedup) y se ejecutará en cuanto
+ *  termine el actual. El encadenamiento se hace dentro de !chain_or_release
+ *  SIN liberar exit_cycle_active entre uno y otro, para evitar la ventana
+ *  de carrera en la que un nuevo trigger podría arrancar otro ciclo en
+ *  paralelo.
  *
- *  La guarda 'not exit_cycle_active' en el handler de no_space y en
- *  check_unstorable_threshold garantiza que nunca haya dos deadlines
- *  solapados: los triggers que lleguen durante un ciclo se descartan; el
- *  supervisor re-emite cuando reseteamos sus flags en exit_cycle_ended.
+ *  El supervisor re-emite no_space al recibir exit_cycle_ended (resetea sus
+ *  flags blocked_group_notified). Si la saturación persiste tras drenar la
+ *  cola, generará un nuevo trigger con exit_cycle_active=false y arrancará
+ *  un ciclo limpio.
  * ------------------------------------------------------------------------- */
 +!begin_exit_cycle(TriggerGroup) <-
     +exit_cycle_active;
-    +trigger_group(TriggerGroup);
-    !block_group(TriggerGroup);
+    !run_one_deadline(TriggerGroup).
+
+/* Cuerpo de UN deadline. NO toca exit_cycle_active: el caller (begin_exit_cycle
+ * la primera vez, chain_or_release en encadenamientos) gestiona el lock. Esto
+ * permite encadenar deadlines pendientes de la cola sin la ventana de carrera
+ * que existiría al hacer "-exit_cycle_active; ...; +exit_cycle_active". */
++!run_one_deadline(Group) <-
+    +trigger_group(Group);
+    !block_group(Group);
     .send(supervisor, tell, exit_cycle_started);
-    .print("Scheduler: T0 — INICIO ciclo de salida (grupo=", TriggerGroup, ")");
-    !run_deadline_for(TriggerGroup);
-    !end_exit_cycle(TriggerGroup).
+    .print("Scheduler: T0 — INICIO ciclo de salida (grupo=", Group, ")");
+    !run_deadline_for(Group);
+    !end_exit_cycle(Group).
 
 /* Dispatch: solo el deadline del grupo disparador. */
 +!run_deadline_for(urgent) <-
@@ -573,7 +627,12 @@ unstorable_threshold(3).
  *  a poder emitir no_space si la saturación persiste.
  * ------------------------------------------------------------------------- */
 +!end_exit_cycle(TriggerGroup) <-
-    -exit_cycle_active;
+    // OJO: NO removemos exit_cycle_active aquí. Lo decide chain_or_release:
+    //   · si la cola tiene pendientes → encadenamos otro deadline manteniendo
+    //     el lock (no hay ventana para que un trigger nuevo arranque otro
+    //     ciclo en paralelo);
+    //   · si la cola está vacía → liberamos el lock y el sistema queda
+    //     disponible para nuevos triggers.
     -trigger_group(_);
     // NO abolimos unstorable_pending: exit_done ya quitó los entregados,
     // así que lo que queda son paquetes que NO salieron en este ciclo y
@@ -581,7 +640,23 @@ unstorable_threshold(3).
     !unblock_group(TriggerGroup);
     .send(supervisor, tell, exit_cycle_ended(TriggerGroup));
     .print("Scheduler: FIN ciclo de salida (trigger=", TriggerGroup, ")");
-    !flush_all_pending_announce.
+    !flush_all_pending_announce;
+    !chain_or_release.
+
+/* Si hay otro deadline encolado, lo ejecutamos INMEDIATAMENTE sin liberar
+ * exit_cycle_active. Reusa run_one_deadline (que no toca el lock). Si la
+ * cola se sigue llenando durante ese deadline, se encadenará igual al cerrar.
+ *
+ * Si la cola está vacía, sólo entonces liberamos exit_cycle_active. */
++!chain_or_release : pending_queue([Next | Rest]) <-
+    -+pending_queue(Rest);
+    .print("Scheduler: cola pendiente — encadenando deadline ", Next,
+           " (resto en cola = ", Rest, ")");
+    !run_one_deadline(Next).
+
++!chain_or_release <-
+    -exit_cycle_active;
+    .print("Scheduler: cola de deadlines vacía — exit_cycle_active liberado").
 
 +!flush_all_pending_announce <-
     .findall(p(C, W, H, Wt, Ty), pending_announce(C, W, H, Wt, Ty), All);

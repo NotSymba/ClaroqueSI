@@ -641,6 +641,8 @@ shelf_usage_local(shelf_9, 0, 0).
     .abolish(container_relocated(CId, _, _));
     .abolish(location(CId, _, _));
     .abolish(my_stored(CId, _, _, _));
+    .abolish(delegated_stored(CId, _, _, _));
+    .abolish(delegating(CId));
     !release_if_reserved(CId);
     -container_destroyed(CId, _).
 
@@ -720,10 +722,29 @@ can_i_manage_weight(Weight) :-
 
 // Regla de autonomía: durante un deadline cada robot sólo se interesa por
 //   · los paquetes que él mismo guardó (at_shelf + my_stored/4)
+//   · los paquetes que un peer le cedió durante la ronda de ayuda
+//     (at_shelf + delegated_stored/4) — ver protocolo de ayuda más abajo
 //   · los unstorable que quedaron en la entrada (at_entry, sin dueño)
 // Así el scheduler no tiene que asignar nadie: cada robot filtra solo.
 can_i_exit(CId, at_shelf(_))   :- my_stored(CId, _, _, _).
+can_i_exit(CId, at_shelf(_))   :- delegated_stored(CId, _, _, _).
 can_i_exit(_,   at_entry(_,_)).
+
+// owned_dim/4: lee W,V del paquete tanto si lo guardé yo (my_stored)
+// como si un peer me lo cedió (delegated_stored). Lo usa execute_exit
+// para liberar el contador local de la shelf tras retrieve.
+owned_dim(CId, Shelf, W, V) :- my_stored(CId, Shelf, W, V).
+owned_dim(CId, Shelf, W, V) :- delegated_stored(CId, Shelf, W, V).
+
+// consume_owned/4: borra del belief base la "propiedad" del paquete
+// (sea propia o delegada). Idempotente y exclusivo: si el paquete está
+// en my_stored se borra de ahí; si está en delegated_stored, de ahí.
++!consume_owned(CId, Shelf, W, V) : my_stored(CId, Shelf, W, V) <-
+    -my_stored(CId, Shelf, W, V).
++!consume_owned(CId, Shelf, W, V) : delegated_stored(CId, Shelf, W, V) <-
+    -delegated_stored(CId, Shelf, W, V).
++!consume_owned(CId, _, _, _) <-
+    .print("AVISO: consume_owned sin propietario para ", CId).
 
 // ─── Recepción de un exit_item ──────────────────────────────
 // Si lo puedo cargar, intento avanzar. Si no, me quedo con la
@@ -800,7 +821,7 @@ can_i_exit(_,   at_entry(_,_)).
 +!try_exit_or_fallback : not exit_in_progress(_) <-
     !pick_best_exit_item(Best);
     if (Best == none) {
-        !fallback_to_normal
+        !try_help_then_fallback
     } else {
         Best = ex(CId, Loc, _, _, Type, _);
         .print("Elijo exit_item ", CId, " (", Loc, "), pido claim");
@@ -822,6 +843,142 @@ can_i_exit(_,   at_entry(_,_)).
     -state(idle);
     +state(busy);
     !handle_container(CId, Weight, W, H, Type).
+
+// ═════════════════════════════════════════════════════════════
+//  PROTOCOLO DE AYUDA EN CICLO DE SALIDA  (peer-to-peer, autónomo)
+//
+//  Cuando un robot termina su propia carga del deadline (no quedan
+//  exit_item que pueda tomar por can_i_exit), antes de caer al
+//  fallback_to_normal pregunta a los peers si necesitan ayuda con
+//  algún paquete de los que ellos guardaron y que él pueda cargar.
+//
+//  Handshake (3 mensajes):
+//    A → all : help_request(A, MaxW)              [tell, broadcast]
+//    P → A   : help_offer(CId, Shelf, W, V, Type) [tell, una oferta por peer]
+//    A → P   : help_take(A, CId)                  [achieve]
+//    P → A   : help_confirm(CId, Shelf, W, V, T)  | help_deny(CId)
+//
+//  Garantías:
+//    · Sólo activo durante active_deadline(_) → en entrada, no se ayuda.
+//    · P NO toca my_stored al ofrecer: solo al confirmar el help_take.
+//      Una oferta no aceptada no genera huérfanos.
+//    · El claim_exit del scheduler sigue siendo el lock atómico real;
+//      si dos robots pidieran ayuda y ambos terminaran intentando el
+//      mismo CId, el scheduler deniega uno.
+//    · asked_for_help_round/0 limita a UN intento por ronda; tras el
+//      fallback el ciclo natural reactivará la pregunta si vuelve a
+//      quedarse sin trabajo.
+//    · Si A acepta y P ya no tiene el CId (porque arrancó execute_exit
+//      en paralelo) → P deniega y A cae al fallback limpio.
+// ═════════════════════════════════════════════════════════════
+
+// ─── Lado A: pedir ayuda ───────────────────────────────────────
++!try_help_then_fallback : active_deadline(_) & not asked_for_help_round <-
+    +asked_for_help_round;
+    !ask_for_help.
+
++!try_help_then_fallback <-
+    .abolish(asked_for_help_round);
+    !fallback_to_normal.
+
++!ask_for_help : max_weight(MyMaxW) <-
+    .my_name(Me);
+    .abolish(help_offer(_, _, _, _, _)[source(_)]);
+    .print("HELP: pido ayuda (maxW=", MyMaxW, ")");
+    !peer_broadcast(help_request(Me, MyMaxW));
+    .wait(800);  // ventana fija para recoger ofertas reactivas
+    .findall(ho(P, CId, S, W, V, T),
+             help_offer(CId, S, W, V, T)[source(P)],
+             Offers);
+    .abolish(help_offer(_, _, _, _, _)[source(_)]);
+    !pick_closest_offer(Offers, none, 999999, Best);
+    !consume_help_offer(Best).
+
++!consume_help_offer(none) <-
+    -asked_for_help_round;
+    .print("HELP: nadie ofrece — paso a entrada");
+    !fallback_to_normal.
+
++!consume_help_offer(ho(P, CId, S, W, V, T)) <-
+    .my_name(Me);
+    .abolish(help_confirm(CId, _, _, _, _)[source(P)]);
+    .abolish(help_deny(CId)[source(P)]);
+    .print("HELP: acepto oferta de ", P, " — ", CId, " en ", S);
+    .send(P, achieve, help_take(Me, CId));
+    // Jason no admite OR dentro de .wait; dormimos un plazo fijo y
+    // finalize_help/2 distingue por guarda (confirm o deny/timeout).
+    .wait(1500);
+    !finalize_help(P, CId).
+
++!finalize_help(P, CId) :
+        help_confirm(CId, Sh, CW, CV, _)[source(P)] <-
+    -help_confirm(CId, Sh, CW, CV, _)[source(P)];
+    +delegated_stored(CId, Sh, CW, CV);
+    -asked_for_help_round;
+    .print("HELP: tomo ", CId, " de ", P, " — re-evalúo exit_items");
+    !try_exit_or_fallback.
+
++!finalize_help(P, CId) <-
+    .abolish(help_deny(CId)[source(P)]);
+    -asked_for_help_round;
+    .print("HELP: ", P, " denegó ", CId, " — fallback");
+    !fallback_to_normal.
+
+// Selección de la oferta más cercana al solicitante (Manhattan a la shelf).
++!pick_closest_offer([], Cur, _, Cur).
++!pick_closest_offer([ho(P, CId, S, W, V, T) | Rest], Cur, MinD, Best) <-
+    !robot_position(RX, RY);
+    !offer_distance(S, RX, RY, D);
+    if (D < MinD) {
+        !pick_closest_offer(Rest, ho(P, CId, S, W, V, T), D, Best)
+    } else {
+        !pick_closest_offer(Rest, Cur, MinD, Best)
+    }.
+
++!offer_distance(S, RX, RY, D) : shelf_location(S, SX, SY) <-
+    D = math.abs(SX - RX) + math.abs(SY - RY).
++!offer_distance(_, _, _, 999998).
+
+// ─── Lado P: responder ofertas y compromiso ────────────────────
+// Recibo solicitud: si tengo algún my_stored del deadline activo que
+// el solicitante pueda cargar, le ofrezco UNO (no comprometo varios).
++help_request(Asker, MaxW)[source(Asker)] <-
+    -help_request(Asker, MaxW)[source(Asker)];
+    !find_offerable(MaxW, Offer);
+    !maybe_offer(Asker, Offer).
+
++!maybe_offer(_, none).
++!maybe_offer(Asker, of(CId, Shelf, W, V, Type)) <-
+    .send(Asker, tell, help_offer(CId, Shelf, W, V, Type));
+    .print("HELP: ofrezco ", CId, " (", Shelf, ") a ", Asker).
+
++!find_offerable(MaxW, Offer) <-
+    .findall(of(CId, Shelf, W, V, Type),
+             (my_stored(CId, Shelf, W, V) &
+              exit_item(CId, at_shelf(Shelf), W, V, Type, _) &
+              W <= MaxW &
+              not delegating(CId)),
+             L);
+    !first_or_none(L, Offer).
+
++!first_or_none([], none).
++!first_or_none([H | _], H).
+
+// Compromiso real: aquí sí transferimos. Si ya no lo tengo
+// (porque arranqué su exit en paralelo o se lo cedí a otro),
+// denegamos y el solicitante volverá al fallback.
++!help_take(Asker, CId)[source(Asker)] :
+        my_stored(CId, Shelf, W, V) & not delegating(CId) <-
+    +delegating(CId);
+    -my_stored(CId, Shelf, W, V);
+    ?exit_item(CId, _, _, _, Type, _);
+    .send(Asker, tell, help_confirm(CId, Shelf, W, V, Type));
+    -delegating(CId);
+    .print("HELP: cedido ", CId, " a ", Asker, " — borrado de mi my_stored").
+
++!help_take(Asker, CId)[source(Asker)] <-
+    .send(Asker, tell, help_deny(CId));
+    .print("HELP: deniego ", CId, " a ", Asker, " (ya no es mío)").
 
 // Defensa en profundidad: SÓLO consideramos exit_items cuyo Kind coincide
 // con un active_deadline(Kind) vigente. Si el scheduler cerró el deadline
@@ -904,8 +1061,8 @@ can_i_exit(_,   at_entry(_,_)).
         !abort_exit_cleanup(CId)
     } else {
         retrieve(CId);
-        ?my_stored(CId, Shelf, W, V);
-        -my_stored(CId, Shelf, W, V);
+        ?owned_dim(CId, Shelf, W, V);
+        !consume_owned(CId, Shelf, W, V);
         !retrieved_shelf(CId, Shelf, W, V);
         +carrying_exit(CId, Type, Shelf, W, V);
         !go_to_exit_cell(EX, EY);
