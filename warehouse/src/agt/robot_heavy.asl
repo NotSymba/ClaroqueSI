@@ -15,7 +15,8 @@ robot_shelf_priority([shelf_9, shelf_6, shelf_7, shelf_2, shelf_3, shelf_4]).
 // Flag compartido con heavy2: el plan genérico de container_available de
 // work.asl NO dispara aquí. En su lugar se ejecuta el plan simétrico
 // decide_heavy_peer definido en work.asl, que consulta al peer y decide
-// quién encola según carga (my_stored) + cola + estado.
+// quién encola según cola de pendientes + estado (idle/going_idle/busy),
+// con desempate por nombre a favor de robot_heavy.
 is_router_robot.
 
 // Solo acepta lo que ni light ni medium pueden llevar

@@ -216,7 +216,15 @@ sign(X, 0)  :- X = 0.
 +!try_move(NX, NY, TX, TY, Mode) :
     timePerMove(T)
 <-
-    .wait(T);
+    // Si llevamos un fragil, el paso es 15% más lento; en otro caso,
+    // usamos el timePerMove del robot tal cual. El belief carrying_fragile
+    // lo gestiona work.asl en cada pickup/retrieve/drop.
+    if (carrying_fragile) {
+        EffT = math.round(T * 1.15)
+    } else {
+        EffT = T
+    };
+    .wait(EffT);
     .my_name(Me);
     ?at(Me, CX, CY);
 

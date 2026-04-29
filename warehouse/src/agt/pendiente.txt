@@ -1,0 +1,16 @@
+
+------------------------------------------------------------
+perdida de la intencion ante error unknown  -> (ya no deberia pasar aun asi lo dejo anotado como posible)
+
+estanterias ignoradas saber porque (no tan importante)
+paquete en entrada ignorado (no tan importante)
+------------------------------------------------------------
+
+path finding mejorado(mala pinta, prioridad baja)
+Se pisan paquetes recien generado (no los ven) condicion de carrera buscar solucion
+mejoras(pathfinding)
+
+
+añadir una actualizacion de la creencia del estado de las estanterias cada unas cuantas salida(prioridad baja)
+
+logging proxima tarea pendiente fichero(al final)

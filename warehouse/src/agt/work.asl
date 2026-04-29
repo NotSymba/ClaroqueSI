@@ -29,6 +29,19 @@ state(idle).
 container_queue([]).
 
 // ─────────────────────────────────────────────────────────────
+//  CARGA FRÁGIL → penalización del 15% al paso
+//  carrying_fragile/0 marca que llevamos un paquete fragil; mov.asl
+//  lo consulta en try_move para multiplicar timePerMove por 1.15.
+//  Se gestiona aquí porque el Type del paquete sólo está disponible
+//  como parámetro de plan en los sitios de pickup/retrieve/drop.
+// ─────────────────────────────────────────────────────────────
++!mark_fragile_if(fragile) <- +carrying_fragile.
++!mark_fragile_if(_).
+
++!unmark_fragile : carrying_fragile <- -carrying_fragile.
++!unmark_fragile.
+
+// ─────────────────────────────────────────────────────────────
 //  CREENCIAS LOCALES: TOPOLOGÍA DE ESTANTERÍAS
 //  Cada robot conoce dónde están y qué tipo admite cada una.
 // ─────────────────────────────────────────────────────────────
@@ -118,10 +131,11 @@ shelf_usage_local(shelf_9, 0, 0).
 //
 //  El scheduler anuncia container_available a AMBOS heavy. Cada uno
 //  consulta al peer su estado y aplica la MISMA regla determinista:
-//    1) menos paquetes actualmente almacenados (my_stored) → gana
-//    2) empate: menor cola → gana
-//    3) empate: idle > going_idle > busy
-//    4) empate absoluto: robot_heavy gana (desempate por nombre)
+//    1) cola de pendientes más corta → gana
+//    2) empate de cola: el no-ocupado (idle | going_idle) gana sobre busy
+//    3) empate de cola y ambos no-ocupados: idle (en zona) gana sobre
+//       going_idle (yendo a zona)
+//    4) empate absoluto (cola y estado iguales): robot_heavy gana
 //  El perdedor simplemente descarta — no envía assign_here. Así un solo
 //  robot encola cada paquete, sin solapamientos ni mensajes extra.
 //
@@ -139,18 +153,16 @@ shelf_usage_local(shelf_9, 0, 0).
 +!decide_heavy_peer(CId, W, H, Weight, Type) :
         container_queue(MyQ) & state(MyS) <-
     .length(MyQ, MyL);
-    .findall(s(C, Sh), my_stored(C, Sh, _, _), SL);
-    .length(SL, MyN);
     !heavy_peer_name(PeerName);
     .my_name(Me);
-    .abolish(heavy_peer_info(_, _, _));
-    .print("decide_heavy_peer ", CId, " — mis stored=", MyN, ", cola=", MyL, ", estado=", MyS);
+    .abolish(heavy_peer_info(_, _));
+    .print("decide_heavy_peer ", CId, " — mi cola=", MyL, ", estado=", MyS);
     .send(PeerName, achieve, report_heavy_info(Me));
-    .wait({+heavy_peer_info(_, _, _)}, 2000, _);
-    if (heavy_peer_info(PeerN, PeerL, PeerS)) {
-        .abolish(heavy_peer_info(_, _, _));
-        .print("Peer ", PeerName, ": stored=", PeerN, ", cola=", PeerL, ", estado=", PeerS);
-        !route_symmetric(CId, W, H, Weight, Type, MyN, MyL, MyS, PeerN, PeerL, PeerS)
+    .wait({+heavy_peer_info(_, _)}, 2000, _);
+    if (heavy_peer_info(PeerL, PeerS)) {
+        .abolish(heavy_peer_info(_, _));
+        .print("Peer ", PeerName, ": cola=", PeerL, ", estado=", PeerS);
+        !route_symmetric(CId, W, H, Weight, Type, MyL, MyS, PeerL, PeerS)
     } else {
         .print("Peer ", PeerName, " no responde — me quedo ", CId);
         !enqueue(CId, W, H, Weight, Type)
@@ -162,59 +174,48 @@ shelf_usage_local(shelf_9, 0, 0).
 +!report_heavy_info(Requester) :
         container_queue(Q) & state(S) <-
     .length(Q, L);
-    .findall(s(C, Sh), my_stored(C, Sh, _, _), SL);
-    .length(SL, N);
-    .send(Requester, tell, heavy_peer_info(N, L, S)).
+    .send(Requester, tell, heavy_peer_info(L, S)).
 
 // Regla simétrica. Los dos heavy ejecutan esta misma cadena con los
 // valores Mi/Peer intercambiados; solo uno acaba en un plan que hace
 // enqueue, el otro cae en un plan "me toca descartar".
 //
-// (1) Menos almacenado gana
-+!route_symmetric(CId, W, H, Weight, Type, MyN, _, _, PeerN, _, _) :
-        MyN < PeerN <-
-    .print("  Yo tengo menos almacenado (", MyN, " < ", PeerN, ") → me quedo ", CId);
-    !enqueue(CId, W, H, Weight, Type).
-
-+!route_symmetric(CId, _, _, _, _, MyN, _, _, PeerN, _, _) :
-        MyN > PeerN <-
-    .print("  Peer tiene menos almacenado (", PeerN, " < ", MyN, ") — descarto ", CId).
-
-// (2) Empate almacenado — menos cola gana
-+!route_symmetric(CId, W, H, Weight, Type, N, MyL, _, N, PeerL, _) :
+// (1) Cola más corta gana
++!route_symmetric(CId, W, H, Weight, Type, MyL, _, PeerL, _) :
         MyL < PeerL <-
-    .print("  Empate stored, mi cola menor (", MyL, " < ", PeerL, ") → me quedo ", CId);
+    .print("  Mi cola menor (", MyL, " < ", PeerL, ") → me quedo ", CId);
     !enqueue(CId, W, H, Weight, Type).
 
-+!route_symmetric(CId, _, _, _, _, N, MyL, _, N, PeerL, _) :
++!route_symmetric(CId, _, _, _, _, MyL, _, PeerL, _) :
         MyL > PeerL <-
-    .print("  Empate stored, peer cola menor — descarto ", CId).
+    .print("  Peer cola menor (", PeerL, " < ", MyL, ") — descarto ", CId).
 
-// (3) Empate N y L — idle gana sobre lo que no es idle
-+!route_symmetric(CId, W, H, Weight, Type, N, L, idle, N, L, PeerS) :
-        PeerS \== idle <-
-    .print("  Empate N+L, yo idle → me quedo ", CId);
+// (2) Empate de cola — el no-ocupado gana sobre el ocupado
++!route_symmetric(CId, W, H, Weight, Type, L, MyS, L, busy) :
+        MyS \== busy <-
+    .print("  Empate cola, peer ocupado y yo no → me quedo ", CId);
     !enqueue(CId, W, H, Weight, Type).
 
-+!route_symmetric(CId, _, _, _, _, N, L, MyS, N, L, idle) :
-        MyS \== idle <-
-    .print("  Empate N+L, peer idle — descarto ", CId).
++!route_symmetric(CId, _, _, _, _, L, busy, L, PeerS) :
+        PeerS \== busy <-
+    .print("  Empate cola, yo ocupado y peer no — descarto ", CId).
 
-// (4) Empate N, L, ninguno idle — going_idle gana sobre busy
-+!route_symmetric(CId, W, H, Weight, Type, N, L, going_idle, N, L, busy) <-
-    .print("  Empate, yo going_idle vs peer busy → me quedo ", CId);
+// (3) Empate de cola y ambos no-ocupados — idle (en zona) gana sobre
+//     going_idle (yendo a zona)
++!route_symmetric(CId, W, H, Weight, Type, L, idle, L, going_idle) <-
+    .print("  Empate cola, yo en zona idle vs peer going_idle → me quedo ", CId);
     !enqueue(CId, W, H, Weight, Type).
 
-+!route_symmetric(CId, _, _, _, _, N, L, busy, N, L, going_idle) <-
-    .print("  Empate, peer going_idle — descarto ", CId).
++!route_symmetric(CId, _, _, _, _, L, going_idle, L, idle) <-
+    .print("  Empate cola, peer en zona idle vs yo going_idle — descarto ", CId).
 
-// (5) Empate absoluto (misma N, L, S) — robot_heavy gana por nombre
-+!route_symmetric(CId, W, H, Weight, Type, N, L, S, N, L, S) :
+// (4) Empate absoluto (misma cola y mismo estado) — robot_heavy gana
++!route_symmetric(CId, W, H, Weight, Type, L, S, L, S) :
         .my_name(robot_heavy) <-
     .print("  Empate absoluto — robot_heavy gana → me quedo ", CId);
     !enqueue(CId, W, H, Weight, Type).
 
-+!route_symmetric(CId, _, _, _, _, _, _, _, _, _, _) <-
++!route_symmetric(CId, _, _, _, _, _, _, _, _) <-
     .print("  Empate absoluto — robot_heavy se queda con ", CId, ", yo descarto").
 
 // ─────────────────────────────────────────────────────────────
@@ -291,6 +292,7 @@ shelf_usage_local(shelf_9, 0, 0).
             !reserve_shelf(CId, Chosen, Weight, V);
             !goto_pos(CId, CX, CY);
             pickup(CId);
+            !mark_fragile_if(Type);
             !navigate_to_shelf(Chosen);
             // try_drop llamará a finish_task internamente con la shelf que
             // ACEPTÓ el drop (original o alternativa tras blacklisting).
@@ -540,6 +542,7 @@ shelf_usage_local(shelf_9, 0, 0).
 // ─────────────────────────────────────────────────────────────
 +!try_drop(CId, Weight, W, H, Type, Shelf) <-
     drop_at(Shelf);
+    !unmark_fragile;
     .print("Depositado ", CId, " en ", Shelf);
     // Cierre de la cadena: finish_task usa SIEMPRE la shelf real donde se
     // aceptó el drop. Si veníamos de una recursión por blacklist, Shelf es
@@ -582,6 +585,7 @@ shelf_usage_local(shelf_9, 0, 0).
 +!force_exit_carried(CId, Type) <-
     !go_to_exit_cell(EX, EY);
     drop_at_exit(EX, EY);
+    !unmark_fragile;
     .send(scheduler, tell, force_exit_cycle(Type));
     .print("Caso límite: ", CId, " entregado a la salida y ciclo solicitado (tipo=", Type, ").").
 
@@ -702,6 +706,7 @@ shelf_usage_local(shelf_9, 0, 0).
     !clear_nav_state;
     !go_to_exit_cell(EX, EY);
     drop_at_exit(EX, EY);
+    !unmark_fragile;
     .print("Recuperación: ", CId, " entregado en la salida").
 +!recover_carrying.
 
@@ -1087,6 +1092,7 @@ owned_dim(CId, Shelf, W, V) :- delegated_stored(CId, Shelf, W, V).
         !abort_exit_cleanup(CId)
     } else {
         retrieve(CId);
+        !mark_fragile_if(Type);
         ?owned_dim(CId, Shelf, W, V);
         !consume_owned(CId, Shelf, W, V);
         !retrieved_shelf(CId, Shelf, W, V);
@@ -1097,6 +1103,7 @@ owned_dim(CId, Shelf, W, V) :- delegated_stored(CId, Shelf, W, V).
             !reshelf_carried(CId, Type, Shelf, W, V)
         } else {
             drop_at_exit(EX, EY);
+            !unmark_fragile;
             .abolish(carrying_exit(CId, _, _, _, _));
             .send(scheduler, tell, exit_done(CId, Type));
             .abolish(exit_item(CId, _, _, _, _, _));
@@ -1115,6 +1122,7 @@ owned_dim(CId, Shelf, W, V) :- delegated_stored(CId, Shelf, W, V).
         !abort_exit_cleanup(CId)
     } else {
         pickup(CId);
+        !mark_fragile_if(Type);
         !get_exit_dim(CId, EW, EV);
         +carrying_exit(CId, Type, none, EW, EV);
         !go_to_exit_cell(EX, EY);
@@ -1123,6 +1131,7 @@ owned_dim(CId, Shelf, W, V) :- delegated_stored(CId, Shelf, W, V).
             !reshelf_carried(CId, Type, none, EW, EV)
         } else {
             drop_at_exit(EX, EY);
+            !unmark_fragile;
             .abolish(carrying_exit(CId, _, _, _, _));
             .send(scheduler, tell, exit_done(CId, Type));
             .abolish(exit_item(CId, _, _, _, _, _));
@@ -1191,6 +1200,7 @@ owned_dim(CId, Shelf, W, V) :- delegated_stored(CId, Shelf, W, V).
 
 +!try_reshelf_drop(CId, W, V, Shelf) <-
     drop_at(Shelf);
+    !unmark_fragile;
     .print("Re-almacenado ", CId, " en ", Shelf, " (deadline expiró durante salida)");
     !commit_shelf(CId, Shelf, W, V);
     .send(scheduler, tell, guardado(CId, Shelf));

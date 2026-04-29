@@ -329,11 +329,8 @@ public class WarehouseArtifact extends Environment {
         updateOccupancy(c.getX(), c.getY(), false);
 
         Literal lit = Literal.parseLiteral("container_destroyed(" + cid + "," + type + ")");
-        addPercept("scheduler", lit);
-        addPercept("supervisor", lit);
-        for (String robotName : model.getRobots().keySet()) {
-            addPercept(robotName, lit);
-        }
+        addPercept(lit);
+ 
     }
 
     /**

@@ -425,7 +425,7 @@ pending_queue([]).
     !run_deadline(short, [urgent], 1).
 
 +!run_deadline_for(normal) <-
-    !run_deadline(long, [standard, fragile], 2).
+    !run_deadline(long, [standard, fragile], 3).
 
 /* Bloqueo per-grupo: sólo para el grupo disparador. */
 +!block_group(urgent) <-
