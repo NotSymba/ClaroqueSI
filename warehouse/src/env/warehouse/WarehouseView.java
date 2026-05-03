@@ -197,7 +197,6 @@ public class WarehouseView extends JFrame {
         for (Robot robot : warehouse.getRobots().values()) {
             robotsText.append(String.format("%-12s [%s]\n", robot.getId(), robot.getType()));
             robotsText.append(String.format("  Pos: (%d,%d)\n", robot.getX(), robot.getY()));
-            robotsText.append(String.format("  Busy: %s\n", robot.isBusy() ? "YES" : "NO"));
             if (robot.isCarrying()) {
                 robotsText.append(String.format("  Carrying: %s\n",
                         robot.getCarriedContainer().getId()));

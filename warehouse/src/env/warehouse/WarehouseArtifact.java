@@ -179,20 +179,8 @@ public class WarehouseArtifact extends Environment {
                 case "retrieve":
                     return executeRetrieve(agName, action);
 
-                case "assignTask":
-                    return executeAssignTask(agName, action);
-
                 case "get_container_info":
                     return executeGetContainerInfo(agName, action);
-
-                case "get_location":
-                    return executeGetLocation(agName, action);
-
-                case "get_shelf_status":
-                    return executeGetShelfStatus(agName, action);
-
-                case "task_complete":
-                    return executeTaskComplete(agName, action);
 
                 case "relocate_container":
                     return executeRelocateContainer(agName, action);
@@ -541,37 +529,6 @@ public class WarehouseArtifact extends Environment {
     }
 
     /**
-     * Acción: assignTask(ContainerId, ShelfId) Asigna una tarea de transporte
-     * al robot.
-     */
-    private boolean executeAssignTask(String agName, Structure action) {
-        String result = model.assignTask(agName, action);
-
-        switch (result) {
-            case "error":
-            case "null_robot":
-            case "null_container":
-                return false;
-            case "already_assigned":
-                return true;
-            case "busy":
-                addError(agName, "busy", "Robot is already busy or carrying");
-                return true;
-            case "cannot_carry":
-                addError(agName, "cannot_carry", "This robot cannot carry the assigned container");
-                return true;
-            case "null_shelf":
-                addError(agName, "no_shelf_available", "No valid shelf for container");
-                return true;
-            default:
-                viewAct(String.format("%s assigned task: %s", agName, result));
-                removePerceptsByUnif(agName, Literal.parseLiteral("no_task"));
-                addPercept(agName, Literal.parseLiteral(result));
-                return true;
-        }
-    }
-
-    /**
      * Acción: get_container_info(ContainerId) Añade una percepción con el peso,
      * dimensiones y tipo del contenedor.
      */
@@ -586,70 +543,6 @@ public class WarehouseArtifact extends Environment {
             addError(agName, "container_not_found", action.getTerm(0).toString());
             return false;
         }
-    }
-
-    /**
-     * Acción: get_location(ItemId) Añade una percepción location(ItemId, X, Y).
-     */
-    private boolean executeGetLocation(String agName, Structure action) {
-        String itemId = action.getTerm(0).toString().replace("\"", "");
-        // Descartar beliefs previos para este item (evita location/3 obsoletos
-        // si el contenedor fue reubicado).
-        removePerceptsByUnif(agName,
-                Literal.parseLiteral("location(" + itemId + ",_,_)"));
-        Literal locationInfo ;
-        if(itemId.startsWith("shelf")){
-            removePerceptsByUnif(agName,
-                    Literal.parseLiteral("locationF(" + itemId + ",_,_)"));
-            locationInfo = model.getFinalShelf(itemId);
-             if (locationInfo != null) {
-                 addPercept(agName, locationInfo);
-             }
-        }
-        locationInfo = model.getLocation(itemId);
-
-        if (locationInfo != null) {
-            addPercept(agName, locationInfo);
-            viewAct(String.format("%s location of %s: %s", agName, itemId, locationInfo.toString()));
-            return true;
-        } else {
-            addError(agName, "item_not_found", "Item not found: " + itemId);
-            return false;
-        }
-    }
-
-    /**
-     * Acción: get_shelf_status(ShelfId) Añade una percepción
-     * shelf_info(ShelfId, MaxW, CurW, MaxV, CurV).
-     */
-    private boolean executeGetShelfStatus(String agName, Structure action) {
-        Literal shelfInfo = model.get_shelf_status(agName, action);
-        if (shelfInfo != null) {
-            addPercept(agName, shelfInfo);
-            return true;
-        }
-        addError(agName, "shelf_not_found", action.getTerm(0).toString());
-        return false;
-    }
-
-    /**
-     * Acción: task_complete(ContainerId, ShelfId) Marca la tarea como
-     * completada y notifica al scheduler.
-     */
-    private boolean executeTaskComplete(String agName, Structure action) {
-        String containerId = action.getTerm(0).toString().replace("\"", "");
-        String shelfId = action.getTerm(1).toString().replace("\"", "");
-        boolean correct = model.taskComplete(agName, action);
-
-        if (correct) {
-            removePerceptsByUnif(agName, Literal.parseLiteral("task(_,_)"));
-            addPercept("scheduler", Literal.parseLiteral(
-                    "task_completed(" + agName + "," + containerId + "," + shelfId + ")"));
-            viewAct(String.format("%s completed task for %s at %s", agName, containerId, shelfId));
-        } else {
-            addError(agName, "task_complete_failed", "Failed to complete task for " + containerId);
-        }
-        return correct;
     }
 
     /**

@@ -11,6 +11,7 @@ import warehouse.Shelf;
 
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class WarehouseModel extends GridWorldModel {
 
@@ -24,7 +25,9 @@ public class WarehouseModel extends GridWorldModel {
     private Map<String, Robot> robots;
     private Map<String, Container> containers;
     private Map<String, Shelf> shelves;
-    private ConcurrentLinkedQueue<Container> pendingContainers;
+    private AtomicInteger PendingContainerCounter = new AtomicInteger(0);
+    private int totalContainers =0;
+
     private Map<String, String> taskAssignments;
 
     // Todas las posiciones válidas de entrada (sin duplicados)
@@ -47,7 +50,6 @@ public class WarehouseModel extends GridWorldModel {
         robots = new ConcurrentHashMap<>();
         containers = new ConcurrentHashMap<>();
         shelves = new ConcurrentHashMap<>();
-        pendingContainers = new ConcurrentLinkedQueue<>();
         taskAssignments = new ConcurrentHashMap<>();
 
         initializeGrid();
@@ -180,7 +182,8 @@ public class WarehouseModel extends GridWorldModel {
         }
 
         containers.put(container.getId(), container);
-        pendingContainers.offer(container);
+        PendingContainerCounter.incrementAndGet();
+        totalContainers++;
         System.out.println("New container generated: " + container);
         return container;
     }
@@ -421,6 +424,7 @@ public class WarehouseModel extends GridWorldModel {
             robot.drop();
             containers.remove(cid);
             totalContainersProcessed++;
+            PendingContainerCounter.decrementAndGet();
             System.out.println("Container " + cid + " exited warehouse via ("
                     + destX + "," + destY + ")");
             return 0;
@@ -567,51 +571,9 @@ public class WarehouseModel extends GridWorldModel {
         }
     }
 
-    public boolean taskComplete(String agName, Structure action) {
-        String containerId = action.getTerm(0).toString().replace("\"", "");
-        String shelfId = action.getTerm(1).toString().replace("\"", "");
-
-        Robot robot = robots.get(agName);
-        Container container = containers.get(containerId);
-        Shelf shelf = shelves.get(shelfId);
-
-        if (robot == null || container == null || shelf == null) {
-            totalErrors++;
-            return false;
-        }
-
-        robot.setBusy(false);
-        taskAssignments.remove(containerId, agName);
-        return true;
-    }
-
     // -------------------------------------------------------------------------
     // CONSULTAS / PERCEPTOS
     // -------------------------------------------------------------------------
-    public Literal get_shelf_status(String agName, Structure action) {
-        try {
-            String shelfId = action.getTerm(0).toString().replace("\"", "");
-            Shelf shelf = shelves.get(shelfId);
-
-            if (shelf == null) {
-                totalErrors++;
-                return null;
-            }
-
-            return Literal.parseLiteral(
-                    "shelf_info("
-                    + shelfId + ","
-                    + shelf.getMaxWeight() + ","
-                    + shelf.getCurrentWeight() + ","
-                    + shelf.getMaxVolume() + ","
-                    + shelf.getCurrentVolume() + ")"
-            );
-
-        } catch (Exception e) {
-            e.printStackTrace();
-            return null;
-        }
-    }
 
     public Literal getFinalShelf(String itemId) {
          Shelf s = shelves.get(itemId);
@@ -623,36 +585,7 @@ public class WarehouseModel extends GridWorldModel {
         return null;
     }
 
-    
-
-    public Literal getLocation(String itemId) {
-        if (itemId.startsWith("shelf_")) {
-            Shelf s = shelves.get(itemId);
-            if (s != null) {
-                return Literal.parseLiteral(
-                        "location(" + itemId + "," + s.getX() + "," + s.getY() + ")"
-                );
-            }
-            return null;
-        }
-        if (itemId.startsWith("container_")) {
-            Container c = containers.get(itemId);
-            if (c != null) {
-                return Literal.parseLiteral(
-                        "location(" + itemId + "," + c.getX() + "," + c.getY() + ")"
-                );
-            }
-        }
-        if (itemId.startsWith("robot")) {
-            Robot r = robots.get(itemId);
-            if (r != null) {
-                return Literal.parseLiteral(
-                        "location(" + itemId + "," + r.getX() + "," + r.getY() + ")"
-                );
-            }
-        }
-        return null;
-    }
+   
 
     public Literal getContainerInfo(String agName, Structure action) {
         try {
@@ -679,69 +612,14 @@ public class WarehouseModel extends GridWorldModel {
         }
     }
 
-    public String assignTask(String agName, Structure action) {
-        try {
-            String containerId = action.getTerm(0).toString().replace("\"", "");
-            String shelfId = action.getTerm(1).toString().replace("\"", "");
-            Container container = containers.get(containerId);
-            Shelf shelf = shelves.get(shelfId);
-            Robot robot = robots.get(agName);
-
-            if (robot == null) {
-                totalErrors++;
-                return "null_robot";
-            }
-
-            if (taskAssignments.containsKey(containerId)) {
-                totalErrors++;
-                return "already_assigned";
-            }
-
-            if (robot.isBusy() || robot.isCarrying()) {
-                totalErrors++;
-                return "busy";
-            }
-
-            if (container == null) {
-                totalErrors++;
-                return "null_container";
-            }
-
-            if (!robot.canCarry(container)) {
-                totalErrors++;
-                return "cannot_carry";
-            }
-
-            if (shelf == null) {
-                totalErrors++;
-                return "null_shelf";
-            }
-
-            taskAssignments.put(container.getId(), agName);
-            robot.setBusy(true);
-            robot.setCurrentTask(container.getId());
-
-            System.out.println("Task assigned to " + agName + ": " + container.getId() + " -> " + shelf.getId());
-            pendingContainers.remove(container);
-
-            return Literal.parseLiteral(
-                    "task(" + container.getId() + "," + shelf.getId() + ")").toString();
-
-        } catch (Exception e) {
-            e.printStackTrace();
-            totalErrors++;
-            return "error";
-        }
-    }
-
     // -------------------------------------------------------------------------
     // UTILIDADES
     // -------------------------------------------------------------------------
     public String getStatistics() {
         long elapsedTime = (System.currentTimeMillis() - startTime) / 1000;
         return String.format(
-                "Time: %ds | Processed: %d | Pending: %d | Errors: %d",
-                elapsedTime, totalContainersProcessed, pendingContainers.size(), totalErrors
+                "Time: %ds | total: %d |Processed: %d | Pending: %d | Errors: %d",
+                elapsedTime, totalContainers, totalContainersProcessed, PendingContainerCounter.get(), totalErrors
         );
     }
 
@@ -762,11 +640,11 @@ public class WarehouseModel extends GridWorldModel {
     }
 
     public int getPendingContainersCount() {
-        return pendingContainers.size();
+        return PendingContainerCounter.get();
     }
-
-    public int getTotalContainersProcessed() {
-        return totalContainersProcessed;
+ 
+    public int getTotalContainers() {
+        return totalContainers;
     }
 
     public int getTotalErrors() {

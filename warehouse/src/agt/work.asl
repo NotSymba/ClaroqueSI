@@ -593,7 +593,6 @@ shelf_usage_local(shelf_9, 0, 0).
 // Caso normal: la reserva sigue ahí (no hubo purga por deadline en medio).
 +!finish_task(CId, Shelf) :
         .my_name(Me) & shelf_reservation(Shelf, Me, W, V, CId) <-
-    task_complete(CId, Shelf);
     !commit_shelf(CId, Shelf, W, V);
     .send(scheduler, tell, guardado(CId, Shelf));
     +my_stored(CId, Shelf, W, V);
@@ -612,7 +611,7 @@ shelf_usage_local(shelf_9, 0, 0).
         pending_drop(CId, Shelf, W, V) <-
     .print("RECUPERACIÓN: reserva purgada por deadline para ", CId,
            " — recupero W=", W, " V=", V, " de pending_drop");
-    task_complete(CId, Shelf);
+     
     !commit_shelf(CId, Shelf, W, V);
     .send(scheduler, tell, guardado(CId, Shelf));
     +my_stored(CId, Shelf, W, V);
@@ -627,7 +626,7 @@ shelf_usage_local(shelf_9, 0, 0).
 +!finish_task(CId, Shelf) <-
     .print("AVISO GRAVE: finish_task sin reserva NI pending_drop para ", CId,
            " en ", Shelf, " — paquete potencialmente huérfano");
-    task_complete(CId, Shelf);
+ 
     .send(scheduler, tell, guardado(CId, Shelf));
     .abolish(shelf_blacklist(_));
     -+state(idle);

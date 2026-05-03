@@ -1,7 +1,7 @@
 package warehouse;
 
 /**
- * Representa un contenedor en el almacén
+ * Representa un c  ontenedor en el almacén
  */
 public class Container {
     private final String id;
