@@ -24,8 +24,8 @@ public class WarehouseArtifact extends Environment {
     // El scheduler controla este set con las acciones block_generation /
     // unblock_generation. Usamos un set concurrente porque el loop del
     // generador corre en hilo dedicado y las acciones las invocan agentes.
-    private final java.util.Set<String> blockedGenerationTypes =
-            java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private final java.util.Set<String> blockedGenerationTypes
+            = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
     // Ruta absoluta a warehouse/eventlog.txt. Resuelta en init() buscando el
     // directorio que contiene warehouse.mas2j desde el CWD; así la traza cae
@@ -118,11 +118,10 @@ public class WarehouseArtifact extends Environment {
                     }
 
                     // Notificar a scheduler y supervisor, reemplazando percepción anterior
-
                     updateOccupancy(container.getX(), container.getY(), true);
                     updateContainerAt(container.getId(), container.getX(), container.getY());
 
-                    removePerceptsByUnif( Literal.parseLiteral("new_container(_)"));
+                    removePerceptsByUnif(Literal.parseLiteral("new_container(_)"));
                     addPercept(Literal.parseLiteral("new_container(" + container.getId() + ")"));
 
                 } catch (InterruptedException e) {
@@ -312,7 +311,7 @@ public class WarehouseArtifact extends Environment {
                     viewAct(String.format("%s crushed %s at (%s)", agName, crushed.getId(), destination));
                 } else {
                     removePerceptsByUnif(agName, Literal.parseLiteral("error(_,_)"));
-                    //viewAct(String.format("%s moved to (%s)", agName, destination));
+                    viewAct();
                 }
                 return true;
             } else if (error == 3) {
@@ -345,7 +344,7 @@ public class WarehouseArtifact extends Environment {
 
         Literal lit = Literal.parseLiteral("container_destroyed(" + cid + "," + type + ")");
         addPercept(lit);
- 
+
     }
 
     /**
@@ -406,7 +405,7 @@ public class WarehouseArtifact extends Environment {
                             "container_relocated(" + containerId + ",_,_)"));
                     addPercept(robotName, Literal.parseLiteral(
                             "container_relocated(" + containerId + ","
-                                    + container.getX() + "," + container.getY() + ")"));
+                            + container.getX() + "," + container.getY() + ")"));
                 }
             }
             return true;
@@ -449,11 +448,11 @@ public class WarehouseArtifact extends Environment {
     }
 
     /**
-     * Acción: drop_at_exit(ExitX, ExitY)
-     * Deposita el contenedor que carga el robot en una celda de la zona de
-     * salida. El contenedor sale definitivamente del sistema y se notifica al
-     * supervisor/scheduler para que actualicen sus estadísticas y liberen la
-     * estantería de origen si procede.
+     * Acción: drop_at_exit(ExitX, ExitY) Deposita el contenedor que carga el
+     * robot en una celda de la zona de salida. El contenedor sale
+     * definitivamente del sistema y se notifica al supervisor/scheduler para
+     * que actualicen sus estadísticas y liberen la estantería de origen si
+     * procede.
      */
     private boolean executeDropAtExit(String agName, Structure action) {
         Robot robot = model.getRobots().get(agName);
@@ -509,7 +508,7 @@ public class WarehouseArtifact extends Environment {
             if (srcShelf != null) {
                 addPercept("supervisor", Literal.parseLiteral(
                         "package_retrieved(" + containerId + "," + srcShelf + ","
-                                + weight + "," + volume + ")"));
+                        + weight + "," + volume + ")"));
             }
             return true;
         } else if (error == 1) {
@@ -546,9 +545,9 @@ public class WarehouseArtifact extends Environment {
     }
 
     /**
-     * Acción: block_generation(Type) / unblock_generation(Type)
-     * Controlan el set de tipos cuya generación está pausada mientras
-     * dura un ciclo de salida. El scheduler las invoca.
+     * Acción: block_generation(Type) / unblock_generation(Type) Controlan el
+     * set de tipos cuya generación está pausada mientras dura un ciclo de
+     * salida. El scheduler las invoca.
      */
     private boolean executeBlockGeneration(String agName, Structure action) {
         String type = action.getTerm(0).toString().replace("\"", "");
@@ -565,9 +564,9 @@ public class WarehouseArtifact extends Environment {
     }
 
     /**
-     * Acción: get_shelf_adjacent(ShelfId)
-     * Añade percepción shelf_adjacent(ShelfId, [pos(X1,Y1), pos(X2,Y2), ...])
-     * con las casillas accesibles (no-shelf) adyacentes al shelf.
+     * Acción: get_shelf_adjacent(ShelfId) Añade percepción
+     * shelf_adjacent(ShelfId, [pos(X1,Y1), pos(X2,Y2), ...]) con las casillas
+     * accesibles (no-shelf) adyacentes al shelf.
      */
     private boolean executeGetShelfAdjacent(String agName, Structure action) {
         String shelfId = action.getTerm(0).toString().replace("\"", "");
@@ -582,9 +581,9 @@ public class WarehouseArtifact extends Environment {
     }
 
     /**
-     * Acción: log_event(EventType, Data)
-     * Emite una línea estructurada en el formato exigido por el enunciado:
-     *   EVENT | time=HH:MM:SS | agent=<agName> | type=<EventType> | data=<Data>
+     * Acción: log_event(EventType, Data) Emite una línea estructurada en el
+     * formato exigido por el enunciado: EVENT | time=HH:MM:SS | agent=<agName>
+     * | type=<EventType> | data=<Data>
      * La línea se vuelca tanto a System.out (consola Jason) como al fichero
      * warehouse/eventlog.txt (path cacheado en init()), en modo append.
      */
@@ -621,12 +620,10 @@ public class WarehouseArtifact extends Environment {
      * el directorio del proyecto Jason (warehouse/) y escribir el log allí
      * SIEMPRE — sin importar el CWD desde el que arranque la JVM.
      *
-     * Heurística:
-     *   1. CWD contiene warehouse.mas2j   → CWD/eventlog.txt
-     *   2. CWD/warehouse/warehouse.mas2j  → CWD/warehouse/eventlog.txt
-     *   3. Subiendo hasta 5 niveles, si encontramos un dir con
-     *      warehouse.mas2j, lo usamos.
-     *   4. Si nada encaja: caemos en CWD/eventlog.txt como último recurso.
+     * Heurística: 1. CWD contiene warehouse.mas2j → CWD/eventlog.txt 2.
+     * CWD/warehouse/warehouse.mas2j → CWD/warehouse/eventlog.txt 3. Subiendo
+     * hasta 5 niveles, si encontramos un dir con warehouse.mas2j, lo usamos. 4.
+     * Si nada encaja: caemos en CWD/eventlog.txt como último recurso.
      */
     private java.nio.file.Path resolveEventLogPath() {
         java.nio.file.Path cwd = java.nio.file.Paths.get("").toAbsolutePath();
@@ -712,6 +709,12 @@ public class WarehouseArtifact extends Environment {
     private void viewAct(String message) {
         if (view != null) {
             view.logMessage(message);
+            view.update();
+        }
+    }
+
+    private void viewAct() {
+        if (view != null) {
             view.update();
         }
     }
