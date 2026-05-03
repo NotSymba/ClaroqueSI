@@ -585,6 +585,7 @@ shelf_usage_local(shelf_9, 0, 0).
 +!force_exit_carried(CId, Type) <-
     !go_to_exit_cell(EX, EY);
     drop_at_exit(EX, EY);
+    log_event(container_delivered, CId);
     !unmark_fragile;
     .send(scheduler, tell, force_exit_cycle(Type));
     .print("Caso límite: ", CId, " entregado a la salida y ciclo solicitado (tipo=", Type, ").").
@@ -706,6 +707,7 @@ shelf_usage_local(shelf_9, 0, 0).
     !clear_nav_state;
     !go_to_exit_cell(EX, EY);
     drop_at_exit(EX, EY);
+    log_event(container_delivered, CId);
     !unmark_fragile;
     .print("Recuperación: ", CId, " entregado en la salida").
 +!recover_carrying.
@@ -1103,6 +1105,7 @@ owned_dim(CId, Shelf, W, V) :- delegated_stored(CId, Shelf, W, V).
             !reshelf_carried(CId, Type, Shelf, W, V)
         } else {
             drop_at_exit(EX, EY);
+            log_event(container_delivered, CId);
             !unmark_fragile;
             .abolish(carrying_exit(CId, _, _, _, _));
             .send(scheduler, tell, exit_done(CId, Type));
@@ -1131,6 +1134,7 @@ owned_dim(CId, Shelf, W, V) :- delegated_stored(CId, Shelf, W, V).
             !reshelf_carried(CId, Type, none, EW, EV)
         } else {
             drop_at_exit(EX, EY);
+            log_event(container_delivered, CId);
             !unmark_fragile;
             .abolish(carrying_exit(CId, _, _, _, _));
             .send(scheduler, tell, exit_done(CId, Type));

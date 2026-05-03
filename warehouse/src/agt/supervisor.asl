@@ -186,9 +186,7 @@ type_group(urgent,   urgent).
         +blocked_group_notified(Group);
         .print("Supervisor: grupo ", Group, " al ", UW, "/", MW, "kg (", UV, "/", MV, "u³) ≥ ",
                R*100, "% — avisando scheduler con no_space(", Type, ")");
-        .time(HH, MM, SS);
-        .print("EVENT | time=", HH, ":", MM, ":", SS,
-               " | agent=supervisor | type=no_space_detected | data=", Group);
+        log_event(no_space_detected, Type);
         .send(scheduler, tell, no_space(Type))
     }.
 
@@ -403,13 +401,17 @@ type_group(urgent,   urgent).
         deadline_violations(K) <-
     .abolish(deadline_violations(_));
     +deadline_violations(K + 1);
-    .time(HH, MM, SS);
     .print("==========================================================");
     .print("ERROR INFORMATIVO | deadline=", Kind, " | tipos=", Types);
     .print("  Contenedores sin entregar al expirar: ", N);
     .print("  Lista: ", Pending);
     .print("  Total incumplimientos acumulados: ", K + 1);
-    .print("EVENT | time=", HH, ":", MM, ":", SS,
-           " | agent=supervisor | type=deadline_violation | data=",
-           Kind, "/", N);
+    !emit_deadline_missed_each(Pending);
     .print("==========================================================").
+
+/* Emite un EVENT por cada contenedor que el deadline activo dejó sin entregar.
+ * data = container_id, según especificación de logging. */
++!emit_deadline_missed_each([]).
++!emit_deadline_missed_each([p(CId, _) | Rest]) <-
+    log_event(deadline_missed, CId);
+    !emit_deadline_missed_each(Rest).

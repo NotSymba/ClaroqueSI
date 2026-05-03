@@ -27,6 +27,12 @@ public class WarehouseArtifact extends Environment {
     private final java.util.Set<String> blockedGenerationTypes =
             java.util.concurrent.ConcurrentHashMap.newKeySet();
 
+    // Ruta absoluta a warehouse/eventlog.txt. Resuelta en init() buscando el
+    // directorio que contiene warehouse.mas2j desde el CWD; así la traza cae
+    // siempre en el mismo sitio independientemente de desde dónde arranque la
+    // JVM (./gradlew run, jason warehouse.mas2j, java -jar shadow.jar...).
+    private java.nio.file.Path eventLogPath;
+
     @Override
     public void init(String[] args) {
         super.init(args);
@@ -43,6 +49,24 @@ public class WarehouseArtifact extends Environment {
         view.logMessage("   Shelves: " + model.getShelves().size());
         view.logMessage("========================================");
         view.logMessage("");
+
+        // Resolvemos warehouse/eventlog.txt y truncamos para empezar limpio
+        // en cada ejecución. Si el fichero no existe lo creamos vacío.
+        eventLogPath = resolveEventLogPath();
+        try {
+            java.nio.file.Path parent = eventLogPath.getParent();
+            if (parent != null) {
+                java.nio.file.Files.createDirectories(parent);
+            }
+            java.nio.file.Files.write(
+                    eventLogPath,
+                    new byte[0],
+                    java.nio.file.StandardOpenOption.CREATE,
+                    java.nio.file.StandardOpenOption.TRUNCATE_EXISTING);
+            System.out.println("Event log: " + eventLogPath.toAbsolutePath());
+        } catch (java.io.IOException e) {
+            System.err.println("No se pudo inicializar " + eventLogPath + ": " + e.getMessage());
+        }
 
         startContainerGenerator();
         Runtime.getRuntime().addShutdownHook(new Thread(this::stop));
@@ -185,6 +209,9 @@ public class WarehouseArtifact extends Environment {
                 case "unblock_generation":
                     return executeUnblockGeneration(agName, action);
 
+                case "log_event":
+                    return executeLogEvent(agName, action);
+
                 default:
                     System.err.println("Unknown action: " + actionName);
                     return false;
@@ -297,7 +324,7 @@ public class WarehouseArtifact extends Environment {
                     viewAct(String.format("%s crushed %s at (%s)", agName, crushed.getId(), destination));
                 } else {
                     removePerceptsByUnif(agName, Literal.parseLiteral("error(_,_)"));
-                    viewAct(String.format("%s moved to (%s)", agName, destination));
+                    //viewAct(String.format("%s moved to (%s)", agName, destination));
                 }
                 return true;
             } else if (error == 3) {
@@ -659,6 +686,77 @@ public class WarehouseArtifact extends Environment {
         }
         addError(agName, "shelf_not_found", "Shelf not found: " + shelfId);
         return false;
+    }
+
+    /**
+     * Acción: log_event(EventType, Data)
+     * Emite una línea estructurada en el formato exigido por el enunciado:
+     *   EVENT | time=HH:MM:SS | agent=<agName> | type=<EventType> | data=<Data>
+     * La línea se vuelca tanto a System.out (consola Jason) como al fichero
+     * warehouse/eventlog.txt (path cacheado en init()), en modo append.
+     */
+    private boolean executeLogEvent(String agName, Structure action) {
+        String type = action.getTerm(0).toString().replace("\"", "");
+        String data = action.getTerm(1).toString().replace("\"", "");
+
+        java.time.LocalTime now = java.time.LocalTime.now();
+        String time = String.format("%02d:%02d:%02d",
+                now.getHour(), now.getMinute(), now.getSecond());
+        String line = String.format(
+                "EVENT | time=%s | agent=%s | type=%s | data=%s",
+                time, agName, type, data);
+
+        System.out.println(line);
+        viewAct(line);
+        if (eventLogPath != null) {
+            try {
+                java.nio.file.Files.write(
+                        eventLogPath,
+                        (line + System.lineSeparator())
+                                .getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                        java.nio.file.StandardOpenOption.CREATE,
+                        java.nio.file.StandardOpenOption.APPEND);
+            } catch (java.io.IOException e) {
+                System.err.println("No se pudo escribir en " + eventLogPath + ": " + e.getMessage());
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Decide dónde vive eventlog.txt. Buscamos warehouse.mas2j para localizar
+     * el directorio del proyecto Jason (warehouse/) y escribir el log allí
+     * SIEMPRE — sin importar el CWD desde el que arranque la JVM.
+     *
+     * Heurística:
+     *   1. CWD contiene warehouse.mas2j   → CWD/eventlog.txt
+     *   2. CWD/warehouse/warehouse.mas2j  → CWD/warehouse/eventlog.txt
+     *   3. Subiendo hasta 5 niveles, si encontramos un dir con
+     *      warehouse.mas2j, lo usamos.
+     *   4. Si nada encaja: caemos en CWD/eventlog.txt como último recurso.
+     */
+    private java.nio.file.Path resolveEventLogPath() {
+        java.nio.file.Path cwd = java.nio.file.Paths.get("").toAbsolutePath();
+
+        if (java.nio.file.Files.exists(cwd.resolve("warehouse.mas2j"))) {
+            return cwd.resolve("eventlog.txt");
+        }
+
+        java.nio.file.Path sub = cwd.resolve("warehouse");
+        if (java.nio.file.Files.exists(sub.resolve("warehouse.mas2j"))) {
+            return sub.resolve("eventlog.txt");
+        }
+
+        java.nio.file.Path probe = cwd;
+        for (int i = 0; i < 5 && probe != null; i++) {
+            java.nio.file.Path candidate = probe.resolve("warehouse");
+            if (java.nio.file.Files.exists(candidate.resolve("warehouse.mas2j"))) {
+                return candidate.resolve("eventlog.txt");
+            }
+            probe = probe.getParent();
+        }
+
+        return cwd.resolve("eventlog.txt");
     }
 
     // -------------------------------------------------------------------------

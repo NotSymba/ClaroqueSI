@@ -417,6 +417,7 @@ pending_queue([]).
     !block_group(Group);
     .send(supervisor, tell, exit_cycle_started);
     .print("Scheduler: T0 — INICIO ciclo de salida (grupo=", Group, ")");
+    log_event(output_phase_started, Group);
     !run_deadline_for(Group);
     !end_exit_cycle(Group).
 
@@ -454,11 +455,12 @@ pending_queue([]).
  *  Un deadline: arma listas, publica, espera Duration ms, limpia.
  * ------------------------------------------------------------------------- */
 +!run_deadline(Kind, Types, Factor) :
-        delta_t(DT) <-
+        delta_t(DT) & trigger_group(Group) <-
     Duration = DT * Factor;
     .print("Scheduler: DEADLINE ", Kind, " activo — tipos=", Types, ", duración=", Duration, "ms");
     +active_deadline(Kind);
     +deadline_shipped_count(Kind, 0);
+    log_event(deadline_started, Group);
     .send(transport, tell, load_start(Kind, Types));
     // Supervisor arranca su propia vigilancia temporal del deadline. Al expirar
     // Duration audita los contenedores de Types que sigan en el almacén y
@@ -470,8 +472,22 @@ pending_queue([]).
     .wait(Duration);
     !close_deadline(Kind).
 
-+!close_deadline(Kind) <-
++!close_deadline(Kind) :
+        trigger_group(Group) <-
     .print("Scheduler: DEADLINE ", Kind, " cerrado");
+    -active_deadline(Kind);
+    ?deadline_shipped_count(Kind, N);
+    -deadline_shipped_count(Kind, _);
+    log_event(deadline_ended, Group);
+    .send(transport, tell, load_end(Kind, N));
+    !broadcast_deadline_end(Kind);
+    !abolish_all_exit_items(Kind).
+
+/* Fallback defensivo: si por una desincronía no hay trigger_group (no debería
+ * pasar porque sólo se borra en end_exit_cycle, posterior a close_deadline)
+ * cerramos sin emitir el EVENT para no romper la intención. */
++!close_deadline(Kind) <-
+    .print("Scheduler: DEADLINE ", Kind, " cerrado (sin trigger_group disponible)");
     -active_deadline(Kind);
     ?deadline_shipped_count(Kind, N);
     -deadline_shipped_count(Kind, _);
