@@ -4,25 +4,27 @@
 idlezone(4,3).
 max_weight(30).
 max_size(1, 2).
-min_weight(10).
-min_size(1, 1).
 
 timePerMove(200).
 priority(2).
 
 robot_shelf_priority([shelf_6, shelf_7, shelf_2, shelf_3, shelf_4, shelf_9]).
 
-// Solo acepta lo que light NO puede llevar (peso > 10 o tamaño > 1x1)
-// pero que medium sí puede (peso <= 30 y tamaño <= 1x2)
+// can_i_manage usa SOLO los topes propios. La regla "el más rápido capaz
+// se queda con el paquete" se aplica en work.asl (+container_available)
+// vía la guarda `not faster_capable`. Aquí declaramos que LIGHT (más
+// rápido que medium) puede gestionar cualquier paquete que quepa en su
+// capacidad propia (W<=1 & H<=1 & Weight<=10): si encaja ahí, medium se
+// abstiene.
 can_i_manage(W, H, Weight) :-
     max_weight(MaxWeight) &
     max_size(MaxW, MaxH) &
-    min_weight(MinWeight) &
-    min_size(MinW, MinH) &
     Weight <= MaxWeight &
     W <= MaxW &
-    H <= MaxH &
-    (Weight > MinWeight | W > MinW | H > MinH).
+    H <= MaxH.
+
+faster_capable(W, H, Weight) :-
+    W <= 1 & H <= 1 & Weight <= 10.
 
 !start.
 

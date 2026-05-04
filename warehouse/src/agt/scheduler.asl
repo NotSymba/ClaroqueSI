@@ -145,12 +145,14 @@ blocked_type(Type) :- type_group(Type, G) & blocked_group(G).
 +guardado(CId, Shelf)[source(R)] : package_info(CId, Weight, V, Type) <-
     .print("Scheduler: ", R, " depositó ", CId, " en ", Shelf);
     .send(supervisor, tell, package_stored(CId, Shelf, Weight, V, Type));
-    -guardado(CId, Shelf)[source(R)].
+    .abolish(guardado(CId, Shelf)[source(R)]);
+    +log_pkg(R, CId, Shelf).
 
 +guardado(CId, Shelf)[source(R)] <-
     .print("Scheduler: ", R, " depositó ", CId, " en ", Shelf, " (sin info cacheada)");
     .send(supervisor, tell, package_stored(CId, Shelf, 0, 0, unknown));
-    -guardado(CId, Shelf)[source(R)].
+    .abolish(guardado(CId, Shelf)[source(R)]);
+    +log_pkg(R, CId, Shelf).
 
 /* Los planes +container_exited/4 viven en la sección del ciclo de salida
  * (más abajo). No se declara nada genérico aquí para que los guards de

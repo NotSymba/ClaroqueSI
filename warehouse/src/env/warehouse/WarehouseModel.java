@@ -40,7 +40,7 @@ public class WarehouseModel extends GridWorldModel {
 
     private int containerCounter = 0;
     private int totalContainersProcessed = 0;
-    private int totalErrors = 0;
+    private AtomicInteger totalErrors = new AtomicInteger(0);
     private long startTime;
 
     public WarehouseModel() {
@@ -166,7 +166,7 @@ public class WarehouseModel extends GridWorldModel {
     public Container newContainer(Set<String> blockedTypes) {
         if (freeEntranceSlots.isEmpty()) {
             System.out.println("No free entrance slots available!");
-            totalErrors++;
+            totalErrors.incrementAndGet();
             return null;
         }
         if (blockedTypes.contains("standard")
@@ -277,17 +277,17 @@ public class WarehouseModel extends GridWorldModel {
             Container container = containers.get(containerId);
 
             if (robot == null || container == null) {
-                totalErrors++;
+                totalErrors.incrementAndGet();
                 return 1;
             }
 
             if (robot.isCarrying()) {
-                totalErrors++;
+                totalErrors.incrementAndGet();
                 return 2;
             }
 
             if (robot.distanceTo(container.getX(), container.getY()) > 1) {
-                totalErrors++;
+                totalErrors.incrementAndGet();
                 return 3;
             }
 
@@ -313,7 +313,7 @@ public class WarehouseModel extends GridWorldModel {
             return 0;
 
         } catch (Exception e) {
-            totalErrors++;
+            totalErrors.incrementAndGet();
             e.printStackTrace();
             return 4;
         }
@@ -335,27 +335,27 @@ public class WarehouseModel extends GridWorldModel {
 
             Container container = containers.get(containerId);
             if (container == null) {
-                totalErrors++;
+                totalErrors.incrementAndGet();
                 return 1;
             }
             if (container.isPicked()) {
-                totalErrors++;
+                totalErrors.incrementAndGet();
                 return 2;
             }
 
             int srcX = container.getX();
             int srcY = container.getY();
             if (grid[srcX][srcY] != CellType.PACKAGE) {
-                totalErrors++;
+                totalErrors.incrementAndGet();
                 return 2;
             }
 
             if (destX < 3 || destX >= 5 || destY < 0 || destY >= 2) {
-                totalErrors++;
+                totalErrors.incrementAndGet();
                 return 4;
             }
             if (grid[destX][destY] != CellType.CLASSIFICATION) {
-                totalErrors++;
+                totalErrors.incrementAndGet();
                 return 3;
             }
 
@@ -376,7 +376,7 @@ public class WarehouseModel extends GridWorldModel {
             return 0;
         } catch (Exception e) {
             e.printStackTrace();
-            totalErrors++;
+            totalErrors.incrementAndGet();
             return 5;
         }
     }
@@ -399,23 +399,23 @@ public class WarehouseModel extends GridWorldModel {
 
             Robot robot = robots.get(agName);
             if (robot == null) {
-                totalErrors++;
+                totalErrors.incrementAndGet();
                 return 1;
             }
             if (!robot.isCarrying()) {
-                totalErrors++;
+                totalErrors.incrementAndGet();
                 return 2;
             }
             if (destX < 0 || destX >= 3 || destY < 0 || destY >= 2) {
-                totalErrors++;
+                totalErrors.incrementAndGet();
                 return 4;
             }
             if (grid[destX][destY] != CellType.EXIT) {
-                totalErrors++;
+                totalErrors.incrementAndGet();
                 return 3;
             }
             if (robot.distanceTo(destX, destY) > 1) {
-                totalErrors++;
+                totalErrors.incrementAndGet();
                 return 5;
             }
 
@@ -430,7 +430,7 @@ public class WarehouseModel extends GridWorldModel {
             return 0;
         } catch (Exception e) {
             e.printStackTrace();
-            totalErrors++;
+            totalErrors.incrementAndGet();
             return 6;
         }
     }
@@ -443,17 +443,17 @@ public class WarehouseModel extends GridWorldModel {
             Shelf shelf = shelves.get(shelfId);
 
             if (robot == null || shelf == null) {
-                totalErrors++;
+                totalErrors.incrementAndGet();
                 return 1;
             }
 
             if (!robot.isCarrying()) {
-                totalErrors++;
+                totalErrors.incrementAndGet();
                 return 2;
             }
 
             if (!isAdjacentToShelf(agName, shelfId)) {
-                totalErrors++;
+                totalErrors.incrementAndGet();
                 return 3;
             }
 
@@ -461,7 +461,7 @@ public class WarehouseModel extends GridWorldModel {
             System.out.println("Intentando depositar " + container.getId() + " en " + shelf.getId());
 
             if (!shelf.canStore(container)) {
-                totalErrors++;
+                totalErrors.incrementAndGet();
                 return 4;
             }
 
@@ -497,34 +497,34 @@ public class WarehouseModel extends GridWorldModel {
             Container container = containers.get(containerId);
 
             if (robot == null || container == null) {
-                totalErrors++;
+                totalErrors.incrementAndGet();
                 return 1;
             }
 
             if (robot.isCarrying()) {
-                totalErrors++;
+                totalErrors.incrementAndGet();
                 return 2;
             }
 
             String shelfId = container.getAssignedShelf();
             if (shelfId == null) {
-                totalErrors++;
+                totalErrors.incrementAndGet();
                 return 4;
             }
 
             Shelf shelf = shelves.get(shelfId);
             if (shelf == null) {
-                totalErrors++;
+                totalErrors.incrementAndGet();
                 return 1;
             }
 
             if (!isAdjacentToShelf(agName, shelfId)) {
-                totalErrors++;
+                totalErrors.incrementAndGet();
                 return 3;
             }
 
             if (!robot.canCarry(container)) {
-                totalErrors++;
+                totalErrors.incrementAndGet();
                 return 5;
             }
 
@@ -541,7 +541,7 @@ public class WarehouseModel extends GridWorldModel {
 
         } catch (Exception e) {
             e.printStackTrace();
-            totalErrors++;
+            totalErrors.incrementAndGet();
             return 6;
         }
     }
@@ -553,7 +553,7 @@ public class WarehouseModel extends GridWorldModel {
             int y = Integer.parseInt(action.getTerm(1).toString().replace("\"", ""));
 
             if (hayAgenteEn(x, y)) {
-                totalErrors++;
+                totalErrors.incrementAndGet() ;
                 System.out.println("error de ruta: agente estatico en ruta");
                 return 3;
             }
@@ -566,26 +566,14 @@ public class WarehouseModel extends GridWorldModel {
 
         } catch (Exception e) {
             e.printStackTrace();
-            totalErrors++;
+            totalErrors.incrementAndGet();
             return 4;
         }
     }
 
     // -------------------------------------------------------------------------
     // CONSULTAS / PERCEPTOS
-    // -------------------------------------------------------------------------
-
-    public Literal getFinalShelf(String itemId) {
-         Shelf s = shelves.get(itemId);
-        if (s != null) {
-            return Literal.parseLiteral(
-                    "locationF(" + itemId + "," + (s.getX() + s.getWidth()) + "," + (s.getY() + s.getHeight())+ ")"
-            );
-        }
-        return null;
-    }
-
-   
+    // -------------------------------------------------------------------------   
 
     public Literal getContainerInfo(String agName, Structure action) {
         try {
@@ -593,7 +581,7 @@ public class WarehouseModel extends GridWorldModel {
             Container container = containers.get(containerId);
 
             if (container == null) {
-                totalErrors++;
+                totalErrors.incrementAndGet();
                 return null;
             }
 
@@ -606,7 +594,7 @@ public class WarehouseModel extends GridWorldModel {
             );
 
         } catch (Exception e) {
-            totalErrors++;
+            totalErrors.incrementAndGet();
             e.printStackTrace();
             return null;
         }
@@ -619,7 +607,7 @@ public class WarehouseModel extends GridWorldModel {
         long elapsedTime = (System.currentTimeMillis() - startTime) / 1000;
         return String.format(
                 "Time: %ds | total: %d |Processed: %d | Pending: %d | Errors: %d",
-                elapsedTime, totalContainers, totalContainersProcessed, PendingContainerCounter.get(), totalErrors
+                elapsedTime, totalContainers, totalContainersProcessed, PendingContainerCounter.get(), totalErrors.get()
         );
     }
 
@@ -648,7 +636,7 @@ public class WarehouseModel extends GridWorldModel {
     }
 
     public int getTotalErrors() {
-        return totalErrors;
+        return totalErrors.get();
     }
 
     /**
@@ -763,7 +751,6 @@ public class WarehouseModel extends GridWorldModel {
             if (c.getX() == r.getX() && c.getY() == r.getY() && !c.isPicked()) {
                 int cx = c.getX();
                 int cy = c.getY();
-
                 // Determinar a qué tipo vuelve la celda
                 boolean esEntrada = allEntranceLocations.stream()
                         .anyMatch(loc -> loc.getX() == cx && loc.getY() == cy);

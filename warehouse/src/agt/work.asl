@@ -114,12 +114,21 @@ shelf_usage_local(shelf_9, 0, 0).
 //  robot_heavy define is_router_robot y sobreescribe este plan con
 //  su propia lógica de coordinación con heavy2.
 //
+//  REGLA: el ROBOT MÁS RÁPIDO QUE PUEDE se queda con el paquete.
+//  Cada robot define `faster_capable(W,H,Weight)` con la capacidad del
+//  robot inmediatamente más rápido que él (light no define nada porque
+//  no hay nadie más rápido — `not faster_capable(...)` se cumple por
+//  closed-world). Si un robot más rápido podría con el paquete, este se
+//  abstiene; si no, lo encola.
+//
 //  Durante exit_in_progress el robot TAMBIÉN encola los nuevos; lo que
 //  no hace es *procesarlos* hasta que el ciclo de salida haya terminado
 //  para él (ver guards de check_idle/process_next).
 // ─────────────────────────────────────────────────────────────
 +container_available(CId, W, H, Weight, Type) :
-        can_i_manage(W, H, Weight) & not is_router_robot <-
+        can_i_manage(W, H, Weight) &
+        not faster_capable(W, H, Weight) &
+        not is_router_robot <-
     !enqueue(CId, W, H, Weight, Type);
     .abolish(container_available(CId, _, _, _, _)).
 
@@ -143,7 +152,9 @@ shelf_usage_local(shelf_9, 0, 0).
 //  no perder el paquete.
 // ─────────────────────────────────────────────────────────────
 +container_available(CId, W, H, Weight, Type) :
-        is_router_robot & can_i_manage(W, H, Weight) <-
+        is_router_robot &
+        can_i_manage(W, H, Weight) &
+        not faster_capable(W, H, Weight) <-
     !decide_heavy_peer(CId, W, H, Weight, Type);
     .abolish(container_available(CId, _, _, _, _)).
 

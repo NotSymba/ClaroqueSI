@@ -14,3 +14,30 @@ mejoras(pathfinding)
 añadir una actualizacion de la creencia del estado de las estanterias cada unas cuantas salida(prioridad baja)
 
 logging proxima tarea pendiente fichero(al final)
+
+
+
+### 7.2 Código dudoso o frágil
+ 
+ 
+- **`Container.setAssignedShelf`** pone `x = -1, y = -1`: efecto colateral
+  oculto. Si alguien llama `setAssignedShelf(null)` (lo hace `retrieveFromShelf`),
+  el contenedor pierde su posición. Funciona porque tras `retrieve` el robot
+  lo lleva en la mano, pero es frágil.
+- **Captura de `Exception` genérica con `e.printStackTrace()`** en muchas
+  acciones: oculta errores reales y obliga a inspeccionar la consola para
+  diagnosticar. Sería mejor distinguir tipos de excepción.
+  
+- **Triple duplicación de topología** (Java, scheduler, work). Cualquier
+  cambio en posiciones/capacidades debe sincronizarse manualmente en 3
+  sitios.
+- **`pending_drop` se crea en `reserve_shelf` pero solo se borra en
+  `commit_shelf` / `release_shelf` / handler de `container_destroyed`**.
+  Si una intención muere entre reserve y commit/release sin pasar por
+  `-!handle_container`, podría quedar huérfano (filtrado solo por la purga).
+- **`finish_task` catch-all** sigue mandando `tell guardado` aunque el commit
+  no se haya hecho — distorsiona la contabilidad del supervisor (lo hace para
+  no perder la pista pero el AVISO GRAVE indica que es un parche).
+- **Condición de carrera generador↔robot**: el generador crea un PACKAGE en
+  `ENTRANCE` mientras un robot ya estaba moviéndose hacia esa celda; al
+  pisarla, splash. Mitigado por `escacharPaquete` pero no eliminado.

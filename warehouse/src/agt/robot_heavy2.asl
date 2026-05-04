@@ -3,9 +3,7 @@
 
 idlezone(6,3).
 max_weight(100).
-max_size(2, 3).
-min_weight(30).
-min_size(1, 2).
+max_size(2, 3). 
 
 timePerMove(500).
 priority(3).
@@ -21,15 +19,18 @@ robot_shelf_priority([shelf_9, shelf_7, shelf_6, shelf_4, shelf_3, shelf_2]).
 // bilateral — ningún robot "manda", se ponen de acuerdo por carga actual.
 is_router_robot.
 
+// Idéntico a robot_heavy: si medium puede con el paquete, los heavy se
+// abstienen. Si no, decide_heavy_peer en work.asl reparte entre los dos
+// heavy según cola y estado.
 can_i_manage(W, H, Weight) :-
     max_weight(MaxWeight) &
     max_size(MaxW, MaxH) &
-    min_weight(MinWeight) &
-    min_size(MinW, MinH) &
     Weight <= MaxWeight &
     W <= MaxW &
-    H <= MaxH &
-    (Weight > MinWeight | W > MinW | H > MinH).
+    H <= MaxH.
+
+faster_capable(W, H, Weight) :-
+    W <= 1 & H <= 2 & Weight <= 30.
 
 !start.
 
