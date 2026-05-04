@@ -96,10 +96,26 @@ type_group(urgent,   urgent).
 
 
 
+/* Periodicidad del snapshot autoritativo de shelf_usage que el supervisor
+ * difunde a los robots para que reconcilien su shelf_usage_local. El
+ * supervisor también emite snapshots tras cada package_stored / retrieved
+ * y al cerrar un ciclo de salida; este timer es la red de seguridad para
+ * cubrir mensajes peer perdidos entre eventos. */
+snapshot_period_ms(15000).
+
 !start.
 
 +!start : true <-
-    .print("Supervisor iniciado y monitorizando el almacén...").
+    .print("Supervisor iniciado y monitorizando el almacén...");
+    !!periodic_snapshot.
+
+/* Bucle independiente: cada snapshot_period_ms reenvía la foto autoritativa
+ * de shelf_usage a los 4 robots. Se lanza con !! desde +!start para que no
+ * bloquee la inicialización ni se cancele al terminar +!start. */
++!periodic_snapshot : snapshot_period_ms(P) <-
+    .wait(P);
+    !broadcast_usage_snapshot;
+    !!periodic_snapshot.
 
 +new_container(CId) : total_received(N) <-
     -+total_received(N+1);
@@ -120,19 +136,17 @@ type_group(urgent,   urgent).
 
 @pkg_stored_known[atomic]
 +package_stored(CId, Shelf, Weight, Volume, Type)[source(scheduler)] :
-        shelf_capacity(Shelf, MaxW, MaxV) & shelf_usage(Shelf, UW, UV) &
-        total_stored(N) <-
-    NewW = UW + Weight;
-    NewV = UV + Volume;
-    .abolish(shelf_usage(Shelf, _, _));
-    +shelf_usage(Shelf, NewW, NewV);
+        shelf_capacity(Shelf, MaxW, MaxV) & total_stored(N) <-
     +stored_at(CId, Shelf, Type, Weight, Volume);
+    !recompute_shelf_usage(Shelf);
+    ?shelf_usage(Shelf, NewW, NewV);
     -+total_stored(N + 1);
     .print("Supervisor: ", CId, " → ", Shelf,
            " | peso ", NewW, "/", MaxW, "kg  vol ", NewV, "/", MaxV, "u³");
     -package_stored(CId, Shelf, Weight, Volume, Type)[source(scheduler)];
     !check_shelf_limits(Shelf, NewW, NewV, MaxW, MaxV);
     !check_type_space(Type);
+    !broadcast_usage_snapshot;
     !calculate_statistics.
 
 @pkg_stored_unknown[atomic]
@@ -231,15 +245,14 @@ type_group(urgent,   urgent).
  * ============================================================================ */
 
 +package_retrieved(CId, Shelf, Weight, Volume) :
-        shelf_usage(Shelf, UW, UV) & shelf_capacity(Shelf, MaxW, MaxV) <-
-    NewW = UW - Weight;
-    NewV = UV - Volume;
-    .abolish(shelf_usage(Shelf, _, _));
-    +shelf_usage(Shelf, NewW, NewV);
+        shelf_capacity(Shelf, MaxW, MaxV) <-
     .abolish(stored_at(CId, _, _, _, _));
+    !recompute_shelf_usage(Shelf);
+    ?shelf_usage(Shelf, NewW, NewV);
     .print("Supervisor: ", CId, " salió de ", Shelf,
            " | peso ", NewW, "/", MaxW, "kg  vol ", NewV, "/", MaxV, "u³");
     !maybe_unmark(Shelf, NewW, NewV, MaxW, MaxV);
+    !broadcast_usage_snapshot;
     -package_retrieved(CId, Shelf, Weight, Volume).
 
 +package_retrieved(CId, Shelf, Weight, Volume) <-
@@ -292,7 +305,40 @@ type_group(urgent,   urgent).
     .abolish(blocked_group_notified(_));
     .print("Supervisor: ciclo terminado (trigger=", Group,
            ") — notificaciones reseteadas para todos los grupos");
+    !broadcast_usage_snapshot;
     -exit_cycle_ended(Group)[source(scheduler)].
+
+/* ============================================================================
+ * RECOMPUTACIÓN DE shelf_usage Y SNAPSHOT AUTORITATIVO A LOS ROBOTS
+ *
+ *   shelf_usage NO se mantiene con +/- por evento (acumulativo, sensible a
+ *   mensajes perdidos). Se DERIVA de stored_at: para cada paquete vivo en la
+ *   shelf sumamos su (W, V) y reescribimos shelf_usage limpio. Así un evento
+ *   perdido afecta, como mucho, a un único contenedor (y al snapshot tras el
+ *   próximo evento se corrige), nunca se compone con errores futuros.
+ *
+ *   broadcast_usage_snapshot envía la foto autoritativa a los 4 robots para
+ *   que reemplacen su shelf_usage_local. Las reservas locales NO se tocan:
+ *   son creencias del propio robot sobre operaciones en vuelo y se siguen
+ *   gestionando por el protocolo peer.
+ * ============================================================================ */
+
++!recompute_shelf_usage(Shelf) <-
+    .findall(uw(W, V), stored_at(_, Shelf, _, W, V), L);
+    !sum_uw(L, 0, 0, NewW, NewV);
+    .abolish(shelf_usage(Shelf, _, _));
+    +shelf_usage(Shelf, NewW, NewV).
+
++!sum_uw([], AW, AV, AW, AV).
++!sum_uw([uw(W, V) | Rest], AW, AV, OW, OV) <-
+    !sum_uw(Rest, AW + W, AV + V, OW, OV).
+
++!broadcast_usage_snapshot <-
+    .findall(usage(S, W, V), shelf_usage(S, W, V), L);
+    .send(robot_light,   tell, shelf_usage_snapshot(L));
+    .send(robot_medium,  tell, shelf_usage_snapshot(L));
+    .send(robot_heavy,   tell, shelf_usage_snapshot(L));
+    .send(robot_heavy2,  tell, shelf_usage_snapshot(L)).
 
 /* ============================================================================
  * LIST_STORED — protocolo de apoyo al scheduler en el ciclo de salida

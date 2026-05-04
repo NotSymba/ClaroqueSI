@@ -142,15 +142,36 @@ blocked_type(Type) :- type_group(Type, G) & blocked_group(G).
  *   - container_exited       → lo percibe del entorno al hacer drop_at_exit
  * ============================================================================ */
 
-+guardado(CId, Shelf)[source(R)] : package_info(CId, Weight, V, Type) <-
+/* Versión nueva con W,V incluidos por el robot. Se usa para el package_stored
+ * al supervisor con valores ciertos, sin depender de package_info (que podría
+ * no estar al recibir el guardado por ventanas de carrera con container_exited
+ * o container_destroyed previos). El Type se intenta resolver desde el caché
+ * pero si no está, se manda 'unknown' (no afecta a shelf_usage del supervisor). */
++guardado(CId, Shelf, W, V)[source(R)] : package_info(CId, _, _, Type) <-
     .print("Scheduler: ", R, " depositó ", CId, " en ", Shelf);
+    .send(supervisor, tell, package_stored(CId, Shelf, W, V, Type));
+    .abolish(guardado(CId, Shelf, W, V)[source(R)]);
+    +log_pkg(R, CId, Shelf).
+
++guardado(CId, Shelf, W, V)[source(R)] <-
+    .print("Scheduler: ", R, " depositó ", CId, " en ", Shelf, " (tipo desconocido, peso/vol del robot)");
+    .send(supervisor, tell, package_stored(CId, Shelf, W, V, unknown));
+    .abolish(guardado(CId, Shelf, W, V)[source(R)]);
+    +log_pkg(R, CId, Shelf).
+
+/* Compatibilidad: ruta legacy del caso patológico de finish_task (sin reserva
+ * ni pending_drop). No tenemos W,V; usamos package_info si está, y si no hay
+ * absolutamente nada, registramos el guardado solo a efectos de log_pkg sin
+ * tocar shelf_usage del supervisor (no inflar con 0,0 que luego un retrieve
+ * descontaría como negativo). */
++guardado(CId, Shelf)[source(R)] : package_info(CId, Weight, V, Type) <-
+    .print("Scheduler: ", R, " depositó ", CId, " en ", Shelf, " (legacy, info cacheada)");
     .send(supervisor, tell, package_stored(CId, Shelf, Weight, V, Type));
     .abolish(guardado(CId, Shelf)[source(R)]);
     +log_pkg(R, CId, Shelf).
 
 +guardado(CId, Shelf)[source(R)] <-
-    .print("Scheduler: ", R, " depositó ", CId, " en ", Shelf, " (sin info cacheada)");
-    .send(supervisor, tell, package_stored(CId, Shelf, 0, 0, unknown));
+    .print("Scheduler: AVISO guardado(", CId, ",", Shelf, ") legacy SIN info — solo log_pkg, no actualizo shelf_usage");
     .abolish(guardado(CId, Shelf)[source(R)]);
     +log_pkg(R, CId, Shelf).
 

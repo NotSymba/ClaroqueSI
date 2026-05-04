@@ -2,5 +2,5 @@
 .cloude/
 .gradle/
 build/
-docs.md
+doc.md
 .gitignore

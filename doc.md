@@ -127,8 +127,12 @@ explícitamente: solo anuncia.
    `relocate_container` a una celda libre de clasificación.
 4. **Responder consultas** (`provide_location(CId, Requester)`):
    los robots preguntan la posición actual antes de ir a recoger.
-5. **Mantener registros de almacenamiento** (`guardado(CId, Shelf)`
-   reenviado al supervisor como `package_stored`).
+5. **Mantener registros de almacenamiento** (`guardado(CId, Shelf, W, V)`
+   reenviado al supervisor como `package_stored`). El robot incluye
+   peso y volumen — el scheduler ya no depende de su caché
+   `package_info` para informar al supervisor (evita el caso
+   degenerado `package_stored(...,0,0,unknown)` cuando hay races
+   con `container_exited`/`container_destroyed` previos).
 6. **Disparar y orquestar el ciclo de salida** cuando recibe
    `no_space(Type)` del supervisor, `force_exit_cycle(Type)` de un
    robot o cuando se acumulan ≥ `unstorable_threshold` (=3)
@@ -387,10 +391,19 @@ agregada para avisar al scheduler.
 1. **Métricas**: total recibidos, total almacenados, total errores
    por tipo, incumplimientos de deadline.
 2. **Ocupación real de cada estantería** (`shelf_usage/3`),
-   actualizada en cada `package_stored` y `package_retrieved`.
+   **derivada** (no acumulativa) de `stored_at`. Tras cada
+   `package_stored`/`package_retrieved` se invoca
+   `recompute_shelf_usage(Shelf)`, que suma los `(W, V)` de los
+   `stored_at(_, Shelf, _, W, V)` vivos y reescribe `shelf_usage`
+   limpio. Beneficio: un evento perdido afecta como mucho a un
+   contenedor y se corrige al siguiente recompute, **nunca se
+   compone** con errores futuros (ya no hay drift acumulativo ni
+   posibilidad de valores negativos).
 3. **Registro `stored_at(CId, Shelf, Type, W, V)`**: qué paquete
-   está en qué estantería. Lo necesita el scheduler para construir
-   la lista de exit_items en cada deadline.
+   está en qué estantería. Es la **única fuente de verdad** del
+   supervisor: tanto `shelf_usage` como las respuestas al scheduler
+   se derivan de aquí. Lo necesita el scheduler para construir la
+   lista de exit_items en cada deadline.
 4. **Disparar `no_space(Type)`** al scheduler cuando la suma
    peso/volumen de las shelves del grupo supera 70 %, con
    bloqueo `blocked_group_notified(Group)` para no spamear.
@@ -419,21 +432,32 @@ agregada para avisar al scheduler.
 ```jason
 @pkg_stored_known[atomic]
 +package_stored(CId, Shelf, Weight, Volume, Type)[source(scheduler)] :
-        shelf_capacity(Shelf, MaxW, MaxV) & shelf_usage(Shelf, UW, UV) &
-        total_stored(N) <-
-    NewW = UW + Weight;
-    NewV = UV + Volume;
-    .abolish(shelf_usage(Shelf, _, _));
-    +shelf_usage(Shelf, NewW, NewV);
+        shelf_capacity(Shelf, MaxW, MaxV) & total_stored(N) <-
     +stored_at(CId, Shelf, Type, Weight, Volume);
+    !recompute_shelf_usage(Shelf);
+    ?shelf_usage(Shelf, NewW, NewV);
     -+total_stored(N + 1);
     !check_shelf_limits(Shelf, NewW, NewV, MaxW, MaxV);
     !check_type_space(Type);
+    !broadcast_usage_snapshot;
     !calculate_statistics.
 ```
 
-`@atomic` evita que dos `package_stored` concurrentes se pisen
-al leer-escribir `shelf_usage` (race típica).
+`@atomic` evita que dos `package_stored` concurrentes se pisen al
+recomputar (la suma sobre `stored_at` y la reescritura de
+`shelf_usage` deben verse atómicas). Tras cada actualización el
+supervisor emite un snapshot autoritativo (`broadcast_usage_snapshot`)
+para que los robots reconcilien `shelf_usage_local`.
+
+`recompute_shelf_usage(Shelf)`:
+
+```jason
++!recompute_shelf_usage(Shelf) <-
+    .findall(uw(W, V), stored_at(_, Shelf, _, W, V), L);
+    !sum_uw(L, 0, 0, NewW, NewV);
+    .abolish(shelf_usage(Shelf, _, _));
+    +shelf_usage(Shelf, NewW, NewV).
+```
 
 ##### Comprobación de saturación por grupo
 
@@ -458,9 +482,40 @@ contar shelves dos veces). El umbral es `type_full_ratio(0.7)`.
 ##### Liberación de espacio
 
 `package_retrieved` (emitido por el entorno al hacer `retrieve`)
-y `container_exited` decrementan `shelf_usage`. Si la shelf cae
-por debajo del `near_full_ratio` (0.9) y estaba marcada,
-`maybe_unmark` la libera.
+borra el `stored_at` correspondiente y vuelve a llamar
+`recompute_shelf_usage(Shelf)`. La cuenta de `shelf_usage` se
+deriva por completo de los `stored_at` vivos, así que es imposible
+que quede en negativo aunque algún mensaje se haya perdido. Tras
+recomputar se emite el snapshot autoritativo para los robots y, si
+la shelf cae por debajo del `near_full_ratio` (0.9) y estaba
+marcada, `maybe_unmark` la libera. `container_exited` solo limpia
+`at_warehouse` (la liberación física de espacio ya la hizo
+`package_retrieved`).
+
+##### Snapshot autoritativo a los robots
+
+```jason
++!broadcast_usage_snapshot <-
+    .findall(usage(S, W, V), shelf_usage(S, W, V), L);
+    .send(robot_light,   tell, shelf_usage_snapshot(L));
+    .send(robot_medium,  tell, shelf_usage_snapshot(L));
+    .send(robot_heavy,   tell, shelf_usage_snapshot(L));
+    .send(robot_heavy2,  tell, shelf_usage_snapshot(L)).
+```
+
+Se emite en tres momentos:
+
+1. Tras cada `package_stored` y `package_retrieved`.
+2. Al cerrar un ciclo de salida (`exit_cycle_ended`).
+3. Periódicamente cada `snapshot_period_ms` (15000 ms por
+   defecto), como red de seguridad para cubrir desincronías
+   entre eventos. El bucle se lanza con `!!periodic_snapshot`
+   desde `+!start` para que viva en una intención independiente.
+
+El supervisor es la **fuente de verdad** dentro del MAS para los
+depósitos confirmados. Los robots reciben el snapshot y reemplazan
+su `shelf_usage_local`; las reservas locales (`shelf_reservation`)
+no se tocan: son creencias propias sobre operaciones en vuelo.
 
 ##### Vigilancia temporal del deadline
 
@@ -612,7 +667,7 @@ container_available    → can_i_manage?     → enqueue
                                   goto_pos → pickup
                                             ↓
                               navigate_to_shelf → drop_at
-                                ├─ ok    → commit_shelf, tell guardado, my_stored, idle
+                                ├─ ok    → commit_shelf, tell guardado(CId,Shelf,W,V), my_stored, idle
                                 └─ fallo → release_shelf, blacklist, retry → ... → force_exit_carried (caso límite)
 ```
 
@@ -723,9 +778,43 @@ Los handlers de mensajes entrantes (`+shelf_reserve`,
 `+shelf_commit`, `+shelf_release`, `+shelf_retrieved`) replican
 estos cambios en los otros robots.
 
+**Reconciliación con el supervisor (`shelf_usage_snapshot`):**
+
+```jason
+@peer_snapshot[atomic]
++shelf_usage_snapshot(L)[source(supervisor)] <-
+    !apply_usage_snapshot(L);
+    -shelf_usage_snapshot(L)[source(supervisor)].
+
++!apply_usage_snapshot([usage(S, W, V) | Rest]) <-
+    .abolish(shelf_usage_local(S, _, _));
+    +shelf_usage_local(S, W, V);
+    !apply_usage_snapshot(Rest).
+```
+
+El supervisor difunde periódicamente (y tras cada
+`package_stored` / `package_retrieved` / cierre de ciclo) la foto
+autoritativa de `shelf_usage`. Cada robot reemplaza su
+`shelf_usage_local` con esa foto, eliminando cualquier drift
+acumulado por mensajes peer perdidos. Las `shelf_reservation` no
+se tocan: son creencias propias del robot sobre operaciones en
+vuelo. Si el snapshot llega justo después de un `commit_shelf`
+local pero antes de que el supervisor procese el `package_stored`
+correspondiente, puede pisar momentáneamente el commit local; el
+siguiente snapshot (emitido tras `package_stored`) lo corrige y,
+mientras tanto, si el robot subestimara la ocupación el entorno
+rechazaría el `drop_at` físico y se reintentaría por la vía normal.
+
 **`finish_task` con tres cláusulas (caso normal, recuperación tras
 purga de deadline, catch-all)**: cierra una tarea de almacenamiento
-con commit + `tell guardado` al scheduler + `+my_stored`.
+con commit + `tell guardado(CId, Shelf, W, V)` al scheduler +
+`+my_stored`. La firma con peso/volumen permite que el supervisor
+suba a `stored_at`/`shelf_usage` valores ciertos sin depender del
+caché del scheduler. La cláusula catch-all (sin reserva ni
+`pending_drop`) sigue enviando la firma legacy `guardado/2` solo a
+efectos informativos: el scheduler la registra en `log_pkg` pero
+ya **no** emite `package_stored(...,0,0,unknown)` (que era lo que
+inflaba con ceros y descuadraba al supervisor en el `retrieve`).
 
 `my_stored(CId, Shelf, W, V)` es **crítico** para el ciclo de
 salida: sin él, `can_i_exit` no se cumple y el robot ignora los
@@ -733,7 +822,10 @@ exit_item de paquetes que él guardó.
 
 **`go_idle` y `recover_carrying`**: vuelta a la zona de idle y
 recuperación best-effort si la tarea murió con paquete en mano
-(lo entrega en la salida).
+(lo entrega en la salida). `recover_carrying` libera la reserva
+(`release_if_reserved(CId)`) **antes** del `drop_at_exit` para
+no dejar reservas zombie en el robot ni en los peers — eso
+inflaría `shelf_fits` en estanterías que estarían realmente libres.
 
 **Manejo de destrucción de contenedor:**
 ```jason
@@ -823,12 +915,20 @@ evita re-cesiones.
 **Caso límite — `force_exit_carried`:**
 ```jason
 +!force_exit_carried(CId, Type) <-
+    !release_if_reserved(CId);
     !go_to_exit_cell(EX, EY);
     drop_at_exit(EX, EY);
     log_event(container_delivered, CId);
     !unmark_fragile;
     .send(scheduler, tell, force_exit_cycle(Type)).
 ```
+
+`release_if_reserved` es defensivo: aunque el caller usual
+(`-!try_drop`) ya libera la reserva antes de escalar, aquí se
+asegura de que no quede ninguna `shelf_reservation` para `CId` en
+el robot ni en los peers — el paquete sale del sistema sin pasar
+por una shelf, así que la reserva no se cerraría por la vía normal
+de `commit_shelf`.
 
 #### 2.4.6 Planes de navegación (en `mov.asl`)
 
@@ -1041,7 +1141,8 @@ scheduler ──> robot_*: tell container_available(CId, W, H, Weight, Type)
 robot_* ──> scheduler: achieve provide_location(CId, Me)
                        achieve claim_exit(CId, Me)
                        tell unstorable(CId, Type)
-                       tell guardado(CId, Shelf)
+                       tell guardado(CId, Shelf, W, V)         (firma con peso/vol)
+                       tell guardado(CId, Shelf)               (firma legacy, solo log)
                        tell exit_done(CId, Type)
                        tell force_exit_cycle(Type)
 
@@ -1055,6 +1156,10 @@ scheduler ──> supervisor: tell package_arrived(CId, W, V, Type)
 supervisor ──> scheduler: tell stored_list_response(Kind, L)
                           tell no_space(Type)
                           tell shelf_full(S) / shelf_free(S)
+
+supervisor ──> robot_*:   tell shelf_usage_snapshot(L)
+                          (foto autoritativa de shelf_usage; los robots
+                           reemplazan su shelf_usage_local con esta L)
 
 scheduler ──> transport:  tell load_start(Kind, Types)
                           tell container_shipped(CId, Type)
@@ -1114,9 +1219,12 @@ ROB  → robot_*:    tell shelf_reserve(c_5, shelf_2, 25, 2)
 ROB  → ENV:        step, step, ..., pickup(c_5)
 ROB  → ENV:        step, step, ..., drop_at(shelf_2)
 ROB  → robot_*:    tell shelf_commit(c_5, shelf_2, 25, 2)
-ROB  → scheduler:  tell guardado(c_5, shelf_2)
+ROB  → scheduler:  tell guardado(c_5, shelf_2, 25, 2)
 SCH  → supervisor: tell package_stored(c_5, shelf_2, 25, 2, standard)
-SUP  → SUP:        actualiza shelf_usage(shelf_2, ...) y check_type_space
+SUP  → SUP:        +stored_at, recompute_shelf_usage(shelf_2),
+                   check_type_space, broadcast_usage_snapshot
+SUP  → robot_*:    tell shelf_usage_snapshot([usage(shelf_1,0,0),
+                                              usage(shelf_2, 25, 2), ...])
 ```
 
 Si `check_type_space` cruza el 70 %:
@@ -1642,16 +1750,37 @@ queda en cola.
 ### 7.4 Estado de shelves duplicado intencionadamente
 
 Cada robot lleva `shelf_usage_local` + `shelf_reservation`; el
-supervisor lleva `shelf_usage` real autoritativo.
+supervisor lleva `shelf_usage` autoritativo (derivado de
+`stored_at`).
 
 **Por qué**: los robots eligen shelf en local sin esperar
 round-trip. Las reservas peer-to-peer (`shelf_reserve`,
-`shelf_commit`, etc.) sincronizan los locales. Durante un
-deadline el supervisor actualiza el suyo a partir de
-`package_retrieved`/`stored`.
+`shelf_commit`, etc.) sincronizan los locales optimistamente.
 
-**Riesgo**: divergencia entre las copias locales si se pierde un
-mensaje. Mitigado con la purga de reservas al `+active_deadline`.
+**Antidrift en dos capas:**
+
+1. **Recomputación, no acumulación.** El supervisor no mantiene
+   `shelf_usage` con sumas/restas evento a evento. Lo deriva de
+   `stored_at` tras cada `package_stored`/`package_retrieved`. Un
+   evento perdido afecta a un único contenedor y no se compone con
+   errores futuros — es imposible que `shelf_usage` quede negativo
+   o que el drift crezca con el tiempo.
+2. **Snapshot autoritativo.** Tras cada cambio, al cerrar un ciclo
+   de salida y periódicamente (cada `snapshot_period_ms` =
+   15000 ms) el supervisor difunde
+   `shelf_usage_snapshot([usage(S, W, V), ...])` a los 4 robots,
+   que reemplazan su `shelf_usage_local`. Las
+   `shelf_reservation` (operaciones en vuelo del propio robot) NO
+   se tocan. Así, cualquier desincronía de los mensajes peer entre
+   robots se corrige al siguiente snapshot.
+
+**Riesgo residual**: si el `stored_at` del supervisor diverge del
+estado real Java (porque algún `package_stored` o
+`package_retrieved` no llegara), la reconciliación entre agentes
+converge a algo coherente entre ellos pero no necesariamente igual
+al entorno. Cerrar ese hueco al 100 % requeriría una acción de
+lectura en el entorno (descartada por el principio de entorno
+delgado).
 
 ### 7.5 Robots heavy simétricos (no leader-follower)
 
@@ -1744,8 +1873,9 @@ if (error(blocked_by_agent, _)) {
 | Reserva huérfana al iniciar deadline | Purga local de `shelf_reservation` por grupo          |
 | `try_move` falla por excepción    | Reintento defensivo + propaga si falla otra vez          |
 | Mensaje de peer perdido (heavy↔heavy2) | Timeout 2 s + nos quedamos el paquete                |
-| `recover_carrying`                | Best-effort: si nos quedamos con paquete, lo entregamos  |
-| `finish_task` sin reserva ni pending_drop | Catch-all que registra el guardado para no perderlo |
+| `recover_carrying`                | Libera reserva + lo entregamos en la salida (best-effort) |
+| `finish_task` sin reserva ni pending_drop | Catch-all `guardado/2` legacy: registra `log_pkg` sin tocar `shelf_usage` (no inflar con ceros) |
+| Drift de `shelf_usage` por mensaje peer perdido | Recompute desde `stored_at` + `shelf_usage_snapshot` periódico del supervisor a los robots |
 
 ### 8.3 Casos donde el sistema podría romperse
 
@@ -1759,16 +1889,21 @@ if (error(blocked_by_agent, _)) {
    por `-!handle_container` (por ejemplo, agente terminado por
    error fatal), el `pending_drop` se queda. Hoy no se observa,
    pero el código no tiene un GC explícito.
-3. **Mensajes peer-to-peer perdidos**: Jason garantiza entrega
-   pero no orden. Si un `shelf_commit` llega antes que el
-   `shelf_reserve` correspondiente (caso patológico), el peer
-   intentaría restar de un usage que no había sumado. El
-   `update_usage_local` clampa a 0 para no quedar negativo, pero
-   pierde precisión.
-4. **`finish_task` catch-all** envía `guardado` al scheduler aún
-   sin `pending_drop`. Distorsiona la contabilidad del supervisor
-   (lo cuenta como almacenado aunque W=0, V=0). Parche
-   intencionado para no perder la traza.
+3. **Mensajes peer-to-peer perdidos o desordenados**: Jason
+   garantiza entrega pero no orden. Si un `shelf_commit` llega
+   antes que el `shelf_reserve` correspondiente, el peer intenta
+   actualizaciones inconsistentes localmente. Mitigado en dos
+   capas: `update_usage_local` clampa a 0 (no negativos) y, sobre
+   todo, el `shelf_usage_snapshot` autoritativo del supervisor
+   reescribe `shelf_usage_local` en cada robot (cada 15 s y tras
+   cada cambio de stored_at), corrigiendo el drift acumulado.
+4. **`finish_task` catch-all** envía `guardado/2` legacy al
+   scheduler. Antes inflaba `shelf_usage` con W=0,V=0. Ahora el
+   scheduler la registra solo en `log_pkg` (sin `package_stored`):
+   el paquete físico queda huérfano en la shelf real pero la
+   contabilidad ya no se distorsiona — y si más tarde se
+   retira, el `package_retrieved` solo borra el `stored_at`
+   correspondiente (que tampoco existe), sin efecto.
 5. **Help_offer con datos rancios**: si el peer ofrece un CId que
    ya no tiene (porque arrancó execute_exit en paralelo) y el
    solicitante acepta, el `help_take` cae al catch-all y manda
@@ -1805,9 +1940,11 @@ hitos relevantes para auditoría posterior:
    en 3 sitios.
 4. **`pending_drop` y `my_stored` desincronizables**: dependen de
    que la cadena reserve→commit no se rompa. El catch-all de
-   `finish_task` lo intenta cubrir.
-5. **`finish_task` catch-all genera "guardado" falsos** con
-   peso/volumen 0 cuando ni reserva ni pending_drop sobreviven.
+   `finish_task` lo intenta cubrir (firma `guardado/2` legacy).
+5. **`finish_task` catch-all** ya no genera `package_stored` falsos
+   con W=0/V=0; solo registra `log_pkg`. El paquete físico
+   quedaría huérfano (sin `my_stored` y sin `stored_at`) pero la
+   contabilidad de ocupación se mantiene íntegra.
 6. **`escacharPaquete` solo gestiona splash de paquetes**
    sin recoger; un paquete recogido nunca cae al grid (asumido,
    no verificado).
@@ -1826,9 +1963,10 @@ hitos relevantes para auditoría posterior:
 2. **El supervisor NO valida que `package_stored` corresponda a
    un `package_arrived`**: si el scheduler le envía un `Shelf`
    desconocido entra en el `pkg_stored_unknown` y solo incrementa
-   total_stored sin tocar `shelf_usage` ni `stored_at`. Resultado:
-   esos paquetes serán **invisibles para list_stored** y nunca
-   saldrán por el ciclo de salida.
+   total_stored sin tocar `stored_at`. Resultado: esos paquetes
+   serán **invisibles para list_stored** y nunca saldrán por el
+   ciclo de salida. Como `shelf_usage` ahora se deriva de
+   `stored_at` (recompute), tampoco aparecen en la ocupación.
 3. **El `total_errors(_)` percept del entorno se reemplaza en cada
    error**, así que el supervisor solo ve la cuenta acumulada del
    último tipo, no un histórico ordenado. La métrica es aproximada.
@@ -1880,16 +2018,25 @@ hitos relevantes para auditoría posterior:
 - `pending_queue([Groups])` — FIFO de triggers durante un ciclo.
 
 ### Supervisor
-- `shelf_usage(S, W, V)`, `shelf_capacity(S, MaxW, MaxV)`.
-- `stored_at(CId, S, Type, W, V)` — quién almacena qué.
+- `shelf_usage(S, W, V)` — derivada de `stored_at` por
+  `recompute_shelf_usage`. NO se mantiene con +/- por evento.
+- `shelf_capacity(S, MaxW, MaxV)`.
+- `stored_at(CId, S, Type, W, V)` — quién almacena qué (única
+  fuente de verdad del supervisor).
 - `at_warehouse(CId, Type, W, V)` — ha entrado, no ha salido.
 - `blocked_group_notified(G)` — ya avisé a scheduler.
+- `snapshot_period_ms(P)` — periodo del broadcast autoritativo de
+  `shelf_usage_snapshot` a los robots (15000 ms).
 - `total_received(N)`, `total_stored(N)`, `deadline_violations(N)`.
 
 ### Robot
 - `state(idle|going_idle|busy)`.
 - `container_queue([pkg(...)])`.
-- `shelf_usage_local(S, W, V)`, `shelf_reservation(S, Owner, W, V, CId)`.
+- `shelf_usage_local(S, W, V)` — depósitos confirmados; se
+  reescribe íntegro al recibir `shelf_usage_snapshot` del
+  supervisor.
+- `shelf_reservation(S, Owner, W, V, CId)` — reservas
+  peer-to-peer, no se tocan al aplicar el snapshot.
 - `pending_drop(CId, S, W, V)` — en vuelo entre reserve y commit.
 - `my_stored(CId, S, W, V)` — paquetes míos en estanterías.
 - `delegated_stored(CId, S, W, V)` — recibidos por help_take.

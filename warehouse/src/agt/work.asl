@@ -501,6 +501,35 @@ shelf_usage_local(shelf_9, 0, 0).
     -shelf_retrieved(CId, Shelf, W, V)[source(R)].
 
 // ─────────────────────────────────────────────────────────────
+//  SNAPSHOT AUTORITATIVO DEL SUPERVISOR
+//
+//  El supervisor difunde periódicamente (y tras cada package_stored /
+//  package_retrieved / cierre de ciclo) shelf_usage_snapshot(L) donde
+//  L = [usage(S, W, V), ...]. Reemplazamos shelf_usage_local con esa
+//  foto: el supervisor es la fuente de verdad para los DEPÓSITOS
+//  CONFIRMADOS, así corregimos cualquier drift acumulado por mensajes
+//  peer perdidos. Las reservas (shelf_reservation) NO se tocan: son
+//  estado propio del robot sobre operaciones en vuelo.
+//
+//  Ventana transitoria: si el robot acaba de hacer commit_shelf y el
+//  supervisor todavía no ha procesado el package_stored correspondiente,
+//  el snapshot puede pisar momentáneamente el commit local. Es aceptable
+//  porque: (a) el siguiente snapshot — emitido tras package_stored — lo
+//  corrige, y (b) si el robot subestima ocupación el entorno rechazará
+//  el drop_at físico y el robot reintentará por la vía normal.
+// ─────────────────────────────────────────────────────────────
+@peer_snapshot[atomic]
++shelf_usage_snapshot(L)[source(supervisor)] <-
+    !apply_usage_snapshot(L);
+    -shelf_usage_snapshot(L)[source(supervisor)].
+
++!apply_usage_snapshot([]).
++!apply_usage_snapshot([usage(S, W, V) | Rest]) <-
+    .abolish(shelf_usage_local(S, _, _));
+    +shelf_usage_local(S, W, V);
+    !apply_usage_snapshot(Rest).
+
+// ─────────────────────────────────────────────────────────────
 //  CONSULTA DE UBICACIÓN AL SCHEDULER
 //  Protocolo: robot → scheduler (achieve provide_location(CId,Me))
 //             scheduler → robot (tell container_location(CId,X,Y))
@@ -594,6 +623,10 @@ shelf_usage_local(shelf_9, 0, 0).
 // zona de salida y pedimos al scheduler que arranque un ciclo de
 // salida del grupo correspondiente para vaciar las estanterías.
 +!force_exit_carried(CId, Type) <-
+    // Defensiva: si por la ruta de llegada quedó reserva, liberarla antes de
+    // salir por la zona de salida (no se hará commit_shelf, así que la reserva
+    // no se borra por la vía normal).
+    !release_if_reserved(CId);
     !go_to_exit_cell(EX, EY);
     drop_at_exit(EX, EY);
     log_event(container_delivered, CId);
@@ -605,7 +638,7 @@ shelf_usage_local(shelf_9, 0, 0).
 +!finish_task(CId, Shelf) :
         .my_name(Me) & shelf_reservation(Shelf, Me, W, V, CId) <-
     !commit_shelf(CId, Shelf, W, V);
-    .send(scheduler, tell, guardado(CId, Shelf));
+    .send(scheduler, tell, guardado(CId, Shelf, W, V));
     +my_stored(CId, Shelf, W, V);
     .abolish(shelf_blacklist(_));
     -+state(idle);
@@ -622,9 +655,9 @@ shelf_usage_local(shelf_9, 0, 0).
         pending_drop(CId, Shelf, W, V) <-
     .print("RECUPERACIÓN: reserva purgada por deadline para ", CId,
            " — recupero W=", W, " V=", V, " de pending_drop");
-     
+
     !commit_shelf(CId, Shelf, W, V);
-    .send(scheduler, tell, guardado(CId, Shelf));
+    .send(scheduler, tell, guardado(CId, Shelf, W, V));
     +my_stored(CId, Shelf, W, V);
     .abolish(shelf_blacklist(_));
     -+state(idle);
@@ -714,6 +747,9 @@ shelf_usage_local(shelf_9, 0, 0).
 // ═════════════════════════════════════════════════════════════
 +!recover_carrying : picked(CId) <-
     .print("Recuperación: tengo ", CId, " en la mano — lo entrego en la salida");
+    // Si quedaba reserva pendiente para este CId la liberamos (broadcast a peers).
+    // Evita reservas zombi que inflan shelf_fits de las demás estanterías.
+    !release_if_reserved(CId);
     !clear_nav_state;
     !go_to_exit_cell(EX, EY);
     drop_at_exit(EX, EY);
@@ -1217,7 +1253,7 @@ owned_dim(CId, Shelf, W, V) :- delegated_stored(CId, Shelf, W, V).
     !unmark_fragile;
     .print("Re-almacenado ", CId, " en ", Shelf, " (deadline expiró durante salida)");
     !commit_shelf(CId, Shelf, W, V);
-    .send(scheduler, tell, guardado(CId, Shelf));
+    .send(scheduler, tell, guardado(CId, Shelf, W, V));
     +my_stored(CId, Shelf, W, V);
     .abolish(carrying_exit(CId, _, _, _, _));
     .abolish(exit_item(CId, _, _, _, _, _));
