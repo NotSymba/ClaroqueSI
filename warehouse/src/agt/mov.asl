@@ -1,24 +1,33 @@
 // ═════════════════════════════════════════════════════════════
-// NAVIGATION.ASL  —  lógica de movimiento unificada
+// MOV.ASL  —  pathfinding greedy con tabú + escape blocker-aware
 //
-// navigate_to(TX, TY)               → llegar exactamente a (TX,TY)
-// navigate_to(TX, TY, adjacent(B))  → B=false: exacto | B=true: dist≤1
-// navigate_adjacent(TX, TY)         → alias de navigate_to con adjacent(true)
-// navigate_to_shelf(Shelf)          → ir junto a un shelf (rectángulo)
-// goto_container(CId)               → ir junto a un contenedor con auto-replan
+// Exposiciones públicas:
+//   navigate_to(TX, TY)               → llegar exactamente a (TX,TY)
+//   navigate_to(TX, TY, adjacent(B))  → adjacent(false): exacto
+//                                        adjacent(true):  dist Manhattan ≤ 1
+//   navigate_adjacent(TX, TY)         → alias con adjacent(true)
+//   navigate_to_shelf(Shelf)          → ir junto a una shelf
+//   goto_container(CId)               → ir junto a un contenedor con replan
+//
+// Coordinación de bloqueos (peer-to-peer vía askOne):
+//   moving                            → belief activo SOLO durante el viaje
+//   current_priority(P) :- moving &
+//                          priority(P).
+//   Otros robots interrogan esa belief vía
+//     .send(Other, askOne, current_priority(_), Reply, Timeout)
+//   y obtienen la prioridad real solo si el bloqueador está en marcha.
+//   Si no responde (timeout, o no está moviéndose), se trata como
+//   obstáculo estático y se escabe alrededor sin esperar.
 // ═════════════════════════════════════════════════════════════
 
 movimientoTratado(true).
 
-// Lista tabú: posición anterior para evitar backtracking inmediato
 prev_pos(-1, -1).
-
-// Contador de bloqueos consecutivos para activar escape perpendicular
 block_streak(0).
-
-// Mejor distancia Manhattan al destino vista en el viaje actual.
-// Cuando mejora, borramos visited/2 para permitir caminos nuevos.
 best_dist(9999).
+
+// Belief consultable por peers: solo unifica si estoy en marcha.
+current_priority(P) :- moving & priority(P).
 
 sign(X, 1)  :- X > 0.
 sign(X, -1) :- X < 0.
@@ -26,7 +35,7 @@ sign(X, 0)  :- X = 0.
 
 
 // ─────────────────────────────────────────────────────────────
-// LIMPIAR ESTADO DE NAVEGACIÓN entre viajes
+// CICLO DE VIDA DEL VIAJE
 // ─────────────────────────────────────────────────────────────
 
 +!clear_nav_state <-
@@ -34,7 +43,12 @@ sign(X, 0)  :- X = 0.
     .abolish(last_move(_));
     -+prev_pos(-1, -1);
     -+block_streak(0);
-    -+best_dist(9999).
+    -+best_dist(9999);
+    +moving.
+
++!end_nav <-
+    -moving;
+    -+block_streak(0).
 
 // Cuando la distancia Manhattan al destino mejora el mínimo visto,
 // borramos la tabla de visitados. Evita quedarse atrapado cuando el
@@ -49,31 +63,24 @@ sign(X, 0)  :- X = 0.
 
 // ═════════════════════════════════════════════════════════════
 // NAVEGACIÓN PRINCIPAL — flag adjacent(Bool)
-//
-// adjacent(false) → llegar exactamente a (TX,TY)
-// adjacent(true)  → detenerse cuando dist_manhattan ≤ 1
-//
-// La condición de parada se evalúa AL INICIO de cada iteración,
-// así que si el robot queda adyacente durante un escape o rodeo
-// lo detecta inmediatamente sin seguir moviéndose.
 // ═════════════════════════════════════════════════════════════
 
-// ── Condición de llegada: modo exacto ────────────────────────
+// Llegada modo exacto
 +!navigate_to(TX, TY, adjacent(false)) :
     .my_name(Me) & at(Me, TX, TY)
 <-
-    -+block_streak(0);
+    !end_nav;
     .print("Llegué a destino exacto: ", TX, ",", TY).
 
-// ── Condición de llegada: modo adyacente (dist ≤ 1) ──────────
+// Llegada modo adyacente
 +!navigate_to(TX, TY, adjacent(true)) :
     .my_name(Me) & at(Me, CX, CY) &
     math.abs(TX - CX) + math.abs(TY - CY) <= 1
 <-
-    -+block_streak(0);
+    !end_nav;
     .print("Estoy adyacente a destino: ", TX, ",", TY).
 
-// ── Caso general: calcular y ejecutar siguiente paso ─────────
+// Caso general
 +!navigate_to(TX, TY, Mode) : true
 <-
     .my_name(Me);
@@ -83,20 +90,8 @@ sign(X, 0)  :- X = 0.
     !next_step(CX, CY, TX, TY, NX, NY);
     !try_move(NX, NY, TX, TY, Mode).
 
-// ── Wrapper de compatibilidad: navigate_to/2 ─────────────────
-// Permite que todo el código existente que llame a navigate_to(X,Y)
-// siga funcionando sin cambios.
+// Compat: navigate_to/2 → adjacent(false)
 +!navigate_to(TX, TY) <- !navigate_to(TX, TY, adjacent(false)).
-
-
-// ═════════════════════════════════════════════════════════════
-// navigate_adjacent — alias limpio
-//
-// Ya NO preselecciona candidatos ni ordena celdas al inicio.
-// navigate_to con adjacent(true) evalúa la condición de parada
-// en cada iteración, así que el robot se detiene en cuanto esté
-// a distancia 1 sin importar por qué ruta llegó.
-// ═════════════════════════════════════════════════════════════
 
 +!navigate_adjacent(TX, TY) <-
     !clear_nav_state;
@@ -105,29 +100,18 @@ sign(X, 0)  :- X = 0.
 
 
 // ═════════════════════════════════════════════════════════════
-// DECISIÓN: siguiente celda
+// SIGUIENTE CELDA — eje Y prioritario
 // ═════════════════════════════════════════════════════════════
 
 +!next_step(CX, CY, TX, TY, NX, NY)
 <-
-    DX = TX - CX;
     DY = TY - CY;
-
-    // Priorizar eje Y; usar X solo cuando ya estamos alineados en Y.
-    // La distribución de shelves (filas horizontales) hace que avanzar
-    // primero en vertical evite atravesar pasillos congestionados.
     if (DY == 0) {
         !candidate_moves_x(CX, CY, TX, TY, Moves)
     } else {
         !candidate_moves_y(CX, CY, TX, TY, Moves)
     };
-
     !choose_valid(Moves, TX, TY, NX, NY).
-
-
-// ─────────────────────────────────────────────────────────────
-// MOVIMIENTOS CANDIDATOS
-// ─────────────────────────────────────────────────────────────
 
 +!candidate_moves_x(CX, CY, TX, TY, Moves)
 <-
@@ -153,20 +137,13 @@ sign(X, 0)  :- X = 0.
 
 
 // ═════════════════════════════════════════════════════════════
-// VALIDACIÓN: elegir movimiento válido (3 pasadas)
-//
-// Pasada 1 — no visitado, no prev_pos            (óptimo)
-// Pasada 2 — visitado permitido, no prev_pos     (rodeo)
-// Pasada 3 — todo permitido incluyendo prev_pos  (último recurso)
-//
-// Las pasadas 2 y 3 ordenan por cercanía Manhattan al destino
-// para no deambular en dirección opuesta.
+// VALIDACIÓN: 3 pasadas
 // ═════════════════════════════════════════════════════════════
 
 +!choose_valid(Moves, TX, TY, NX, NY) <-
     !try_fresh(Moves, TX, TY, NX, NY).
 
-// ── Pasada 1: no visitados, no prev_pos ──────────────────────
+// Pasada 1 — no visitado, no prev_pos
 +!try_fresh([pos(X,Y)|_], _, _, X, Y) :
     not robot(_, X, Y) & not shelf(X, Y) & not container(_, X, Y) &
     not prev_pos(X, Y) & not visited(X, Y) &
@@ -175,7 +152,7 @@ sign(X, 0)  :- X = 0.
 +!try_fresh([_|Rest], TX, TY, NX, NY) <- !try_fresh(Rest, TX, TY, NX, NY).
 +!try_fresh([], TX, TY, NX, NY)       <- !try_visited(TX, TY, NX, NY).
 
-// ── Pasada 2: visitados permitidos, no prev_pos ───────────────
+// Pasada 2 — visitados permitidos, no prev_pos
 +!try_visited(TX, TY, NX, NY) :
     .my_name(Me) & at(Me, CX, CY)
 <-
@@ -191,7 +168,7 @@ sign(X, 0)  :- X = 0.
 +!try_visited_list([_|Rest], TX, TY, NX, NY) <- !try_visited_list(Rest, TX, TY, NX, NY).
 +!try_visited_list([], TX, TY, NX, NY)       <- !try_prev(TX, TY, NX, NY).
 
-// ── Pasada 3: todo permitido incluido prev_pos ────────────────
+// Pasada 3 — todo permitido incluido prev_pos
 +!try_prev(TX, TY, NX, NY) :
     .my_name(Me) & at(Me, CX, CY)
 <-
@@ -210,15 +187,12 @@ sign(X, 0)  :- X = 0.
 
 
 // ═════════════════════════════════════════════════════════════
-// EJECUCIÓN DEL MOVIMIENTO — propaga Mode
+// EJECUCIÓN DEL MOVIMIENTO
 // ═════════════════════════════════════════════════════════════
 
 +!try_move(NX, NY, TX, TY, Mode) :
     timePerMove(T)
 <-
-    // Si llevamos un fragil, el paso es 15% más lento; en otro caso,
-    // usamos el timePerMove del robot tal cual. El belief carrying_fragile
-    // lo gestiona work.asl en cada pickup/retrieve/drop.
     if (carrying_fragile) {
         EffT = math.round(T * 1.15)
     } else {
@@ -234,22 +208,17 @@ sign(X, 0)  :- X = 0.
     -+last_move(pos(NX, NY));
 
     if (error(blocked_by_agent, _)) {
-        .print("Bloqueado → reintentando...");
+        .print("Bloqueado en (", NX, ",", NY, ") → resolución");
         !handle_block(NX, NY, TX, TY, Mode)
     } else {
         -+block_streak(0);
         !navigate_to(TX, TY, Mode)
     }.
 
-// Compatibilidad con llamadas antiguas a try_move/4
 +!try_move(NX, NY, TX, TY) <- !try_move(NX, NY, TX, TY, adjacent(false)).
 
-// ── Recuperación defensiva ────────────────────────────────────
-// Si step(...) o cualquier sub-meta del cuerpo lanza fallo (env
-// devolvió false por out-of-bounds, excepción inesperada, etc.),
-// reseteamos el estado de navegación y reintentamos UNA vez. Si
-// el segundo intento también muere, propagamos la fallo arriba
-// para que los handlers de handle_container/execute_exit limpien.
+// Recuperación defensiva: si step falla por motivo distinto al bloqueo
+// (oob, excepción), reseteamos estado y reintentamos UNA vez.
 -!try_move(_, _, TX, TY, Mode) : not retrying_move <-
     .print("AVISO: try_move falló — limpio estado y reintento navigate_to");
     +retrying_move;
@@ -260,11 +229,12 @@ sign(X, 0)  :- X = 0.
 
 -!try_move(NX, NY, _, _, _) <-
     -retrying_move;
+    -moving;
     .print("AVISO: try_move(", NX, ",", NY, ") falló por segunda vez — propago fallo").
 
 
 // ═════════════════════════════════════════════════════════════
-// GESTIÓN DE BLOQUEOS — propaga Mode
+// GESTIÓN DE BLOQUEOS — askOne para prioridad real
 // ═════════════════════════════════════════════════════════════
 
 +!handle_block(NX, NY, TX, TY, Mode) : priority(MyP) & block_streak(BS)
@@ -274,116 +244,122 @@ sign(X, 0)  :- X = 0.
     see;
     !resolve_block(NX, NY, TX, TY, MyP, NBC, Mode).
 
-// ── Hay robot en la celda bloqueada → comparar prioridades ───
-+!resolve_block(NX, NY, TX, TY, MyP, NBC, Mode) : robot(_, NX, NY)
+// Bloqueador identificable
++!resolve_block(NX, NY, TX, TY, MyP, NBC, Mode) : robot(Other, NX, NY)
 <-
-    !get_other_priority(NX, NY, OtherP);
-    if (OtherP < MyP) {
-        // El otro tiene más prioridad → yo cedo
-        .print("Cedo el paso al robot con mayor prioridad");
-        -+block_streak(0);
-        !escape_move(TX, TY, Mode)
-    } else {
-        if (OtherP > MyP) {
-            // Yo tengo más prioridad → espero; si el otro no cede, escabo
-            .wait(200);
-            if (NBC >= 3) {
-                .print("Otro no cede tras ", NBC, " intentos → escape");
-                -+block_streak(0);
-                !escape_move(TX, TY, Mode)
-            } else {
-                !navigate_to(TX, TY, Mode)
-            }
-        } else {
-            // Misma prioridad → backoff aleatorio
-            .random(R);
-            W = (math.round(R * 300) + 100);
-            .wait(W);
-            if (NBC >= 3) {
-                -+block_streak(0);
-                !escape_move(TX, TY, Mode)
-            } else {
-                !navigate_to(TX, TY, Mode)
-            }
-        }
-    }.
+    !query_priority(Other, OtherP);
+    !decide_block(Other, NX, NY, TX, TY, MyP, OtherP, NBC, Mode).
 
-// ── Fallback: no se detecta quién bloquea ────────────────────
-+!resolve_block(NX, NY, TX, TY, MyP, NBC, Mode)
+// Fallback: percibí blocked_by_agent pero no veo robot en la celda.
+// Backoff aleatorio + reintento; si insiste, escape sin coordenadas.
++!resolve_block(NX, NY, TX, TY, _, NBC, Mode)
 <-
     .random(R);
-    W = (math.round(R * 300) + 100);
+    W = math.round(R * 300) + 100;
     .wait(W);
     if (NBC >= 3) {
         -+block_streak(0);
-        !escape_move(TX, TY, Mode)
+        !escape_around(NX, NY, TX, TY, Mode)
     } else {
         !navigate_to(TX, TY, Mode)
     }.
 
-// ── Obtener prioridad del robot en (NX, NY) ───────────────────
-// Se infiere del nombre: *light* → 1 | *medium* → 2 | demás → 3
-+!get_other_priority(NX, NY, P) : robot(Name, NX, NY)
-<-
-    .term2string(Name, SName);
-    if (.substring("light", SName)) {
-        P = 1
+
+// ── Decidir según prioridad obtenida ────────────────────────────
+//   OtherP = -1   → estático/sin respuesta: escape sin esperar.
+//   OtherP < MyP  → más prioridad que yo: cedo, escape alrededor.
+//   OtherP > MyP  → menos prioridad: espero; si insiste, escape.
+//   OtherP = MyP  → empate: backoff aleatorio; si insiste, escape.
+
++!decide_block(_, NX, NY, TX, TY, _, -1, _, Mode) <-
+    .print("Bloqueador estático/sin respuesta → escape sin esperar");
+    -+block_streak(0);
+    !escape_around(NX, NY, TX, TY, Mode).
+
++!decide_block(Other, NX, NY, TX, TY, MyP, OtherP, _, Mode) : OtherP < MyP <-
+    .print("Cedo paso a ", Other, " (prioridad ", OtherP, " < mía ", MyP, ")");
+    -+block_streak(0);
+    !escape_around(NX, NY, TX, TY, Mode).
+
++!decide_block(Other, NX, NY, TX, TY, MyP, OtherP, NBC, Mode) : OtherP > MyP <-
+    .wait(200);
+    if (NBC >= 3) {
+        .print(Other, " no cede tras ", NBC, " intentos → escape lateral");
+        -+block_streak(0);
+        !escape_around(NX, NY, TX, TY, Mode)
     } else {
-        if (.substring("medium", SName)) {
-            P = 2
-        } else {
-            P = 3
-        }
+        !navigate_to(TX, TY, Mode)
     }.
 
-+!get_other_priority(_, _, 99).   // No encontrado → prioridad baja
-
-
-// ═════════════════════════════════════════════════════════════
-// ESCAPE PERPENDICULAR — propaga Mode
-// ═════════════════════════════════════════════════════════════
-
-+!escape_move(TX, TY, Mode)
-<-
-    .my_name(Me);
-    see;
-    ?at(Me, CX, CY);
-
-    DX = TX - CX;
-    DY = TY - CY;
-
-    // Si el bloqueo es principalmente horizontal, escapa en vertical y viceversa
-    if (math.abs(DX) >= math.abs(DY)) {
-        Moves = [
-            pos(CX, CY + 1),
-            pos(CX, CY - 1),
-            pos(CX + 1, CY),
-            pos(CX - 1, CY)
-        ]
++!decide_block(_, NX, NY, TX, TY, _, _, NBC, Mode) <-
+    .random(R);
+    W = math.round(R * 300) + 100;
+    .wait(W);
+    if (NBC >= 3) {
+        -+block_streak(0);
+        !escape_around(NX, NY, TX, TY, Mode)
     } else {
-        Moves = [
-            pos(CX + 1, CY),
-            pos(CX - 1, CY),
-            pos(CX, CY + 1),
-            pos(CX, CY - 1)
-        ]
-    };
-
-    !choose_valid(Moves, TX, TY, NX, NY);
-    !try_move(NX, NY, TX, TY, Mode).
-
-// Compatibilidad con llamadas antiguas a escape_move/2
-+!escape_move(TX, TY) <- !escape_move(TX, TY, adjacent(false)).
+        !navigate_to(TX, TY, Mode)
+    }.
 
 
-// ════════════════════════════════════════════════════════════
-// IR A RECOGER UN CONTENEDOR CON AUTO-REPLAN
+// ── Consulta de prioridad por askOne ────────────────────────────
+// Si el otro tiene `moving`, su current_priority/1 unifica y devuelve
+// el valor real. Si no (idle/parado) o si hay timeout, parse_priority_reply
+// devuelve -1 → tratamos como estático.
++!query_priority(Robot, OtherP) <-
+    .send(Robot, askOne, current_priority(_), Reply, 200);
+    !parse_priority_reply(Reply, OtherP).
+
++!parse_priority_reply(current_priority(P), P).
++!parse_priority_reply(_, -1).
+
+
+// ═════════════════════════════════════════════════════════════
+// ESCAPE BLOCKER-AWARE
 //
-// Si el scheduler reubica el contenedor durante la navegación,
-// al llegar el robot verifica la posición actual; si cambió,
-// re-navega. La percepción container_relocated es informativa;
-// la verificación post-arribo se encarga del reencaminamiento.
-// ════════════════════════════════════════════════════════════
+// Dado el bloqueador en (BX,BY), el robot da UN paso lateral y deja
+// que navigate_to recompute la ruta. Las dos perpendiculares se
+// generan rotando 90° la dirección de aproximación (BX-CX, BY-CY).
+// El backstep es último recurso.
+//
+// Las celdas se ordenan por distancia Manhattan al destino, así
+// elegimos el lateral que NOS ACERCA al objetivo (no nos lleva a
+// sitios raros) entre los que estén libres.
+// ═════════════════════════════════════════════════════════════
+
++!escape_around(BX, BY, TX, TY, Mode) :
+    .my_name(Me) & at(Me, CX, CY)
+<-
+    DX = BX - CX;
+    DY = BY - CY;
+
+    // Rotaciones 90° de (DX,DY): (-DY,DX) y (DY,-DX).
+    P1X = CX - DY; P1Y = CY + DX;
+    P2X = CX + DY; P2Y = CY - DX;
+    // Backstep
+    BKX = CX - DX; BKY = CY - DY;
+
+    Cand = [pos(P1X, P1Y), pos(P2X, P2Y), pos(BKX, BKY)];
+    !sort_by_distance(Cand, TX, TY, Sorted);
+    !pick_escape_cell(Sorted, EX, EY);
+    .print("Escape lateral (", EX, ",", EY, ") rodeando bloqueador en (", BX, ",", BY, ")");
+    !try_move(EX, EY, TX, TY, Mode).
+
++!pick_escape_cell([pos(X,Y)|_], X, Y) :
+    not robot(_, X, Y) & not shelf(X, Y) & not container(_, X, Y) &
+    X >= 0 & X < 20 & Y >= 0 & Y < 15
+<- true.
++!pick_escape_cell([_|Rest], EX, EY) <-
+    !pick_escape_cell(Rest, EX, EY).
++!pick_escape_cell([], _, _) <-
+    .print("Sin celda de escape libre — propago fallo");
+    .fail.
+
+
+// ═════════════════════════════════════════════════════════════
+// IR A RECOGER UN CONTENEDOR CON AUTO-REPLAN
+// ═════════════════════════════════════════════════════════════
 
 +!goto_container(CId) <-
     -container_relocated(CId, _, _);
@@ -394,7 +370,6 @@ sign(X, 0)  :- X = 0.
     !navigate_adjacent(PX, PY);
     !verify_container_pos(CId, PX, PY).
 
-// Percepción informativa de reubicación
 +container_relocated(CId, NX, NY) <-
     .print("Aviso: ", CId, " reubicado a (", NX, ",", NY, ")").
 
@@ -415,12 +390,6 @@ sign(X, 0)  :- X = 0.
 
 // ═════════════════════════════════════════════════════════════
 // NAVEGACIÓN A SHELF (vía casillas adyacentes accesibles)
-//
-// El entorno provee shelf_adjacent(ShelfId, [pos(X1,Y1),...])
-// con las casillas no-shelf que bordean el shelf.
-// El robot intenta ir a la más cercana; si falla, prueba la
-// siguiente. Usa navigate_to exacto (no adjacent) porque las
-// celdas candidatas ya son ellas mismas adyacentes al shelf.
 // ═════════════════════════════════════════════════════════════
 
 shelf_adj_candidates([]).
@@ -436,7 +405,6 @@ shelf_adj_candidates([]).
     -+shelf_adj_candidates(Sorted);
     !try_shelf_candidates(Shelf).
 
-// ── Saltar celda ocupada por robot ───────────────────────────
 +!try_shelf_candidates(Shelf) :
     shelf_adj_candidates([pos(TX,TY)|Rest]) & robot(_, TX, TY)
 <-
@@ -444,13 +412,11 @@ shelf_adj_candidates([]).
     .print("Casilla (", TX, ",", TY, ") ocupada por robot, saltando...");
     !try_shelf_candidates(Shelf).
 
-// ── Intentar la siguiente candidata ──────────────────────────
 +!try_shelf_candidates(Shelf) :
     shelf_adj_candidates([pos(TX,TY)|Rest])
 <-
     -+shelf_adj_candidates(Rest);
     .print("Intentando casilla adyacente a ", Shelf, ": (", TX, ",", TY, ")");
-    // navigate_to exacto: la celda candidata ya es adyacente al shelf
     !navigate_to(TX, TY, adjacent(false));
     .my_name(Me);
     see;
@@ -462,7 +428,6 @@ shelf_adj_candidates([]).
         !try_shelf_candidates(Shelf)
     }.
 
-// ── Sin candidatos disponibles ───────────────────────────────
 +!try_shelf_candidates(Shelf) :
     shelf_adj_candidates([])
 <-
@@ -471,7 +436,7 @@ shelf_adj_candidates([]).
 
 
 // ═════════════════════════════════════════════════════════════
-// UTILIDADES: ordenar posiciones por distancia Manhattan
+// UTILIDADES — ordenar posiciones por distancia Manhattan
 // ═════════════════════════════════════════════════════════════
 
 +!sort_by_distance([], _, _, []).
