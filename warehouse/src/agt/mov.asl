@@ -80,6 +80,25 @@ sign(X, 0)  :- X = 0.
     !end_nav;
     .print("Estoy adyacente a destino: ", TX, ",", TY).
 
+// Llegada modo set: estoy ya en una celda del conjunto-meta
++!navigate_to(_, _, set(Cells)) :
+    .my_name(Me) & at(Me, CX, CY) & .member(pos(CX, CY), Cells)
+<-
+    !end_nav;
+    .print("Llegué a celda del set en (", CX, ",", CY, ")").
+
+// Caso general modo set: recalcula la celda-meta más cercana en cada paso
++!navigate_to(_, _, set(Cells))
+<-
+    .my_name(Me);
+    see;
+    ?at(Me, CX, CY);
+    !sort_by_distance(Cells, CX, CY, Sorted);
+    [pos(TX, TY) | _] = Sorted;
+    !maybe_reset_visited(TX, TY, CX, CY);
+    !next_step(CX, CY, TX, TY, NX, NY);
+    !try_move(NX, NY, TX, TY, set(Cells)).
+
 // Caso general
 +!navigate_to(TX, TY, Mode) : true
 <-
@@ -97,6 +116,14 @@ sign(X, 0)  :- X = 0.
     !clear_nav_state;
     .print("Navegando adyacente a (", TX, ",", TY, ")");
     !navigate_to(TX, TY, adjacent(true)).
+
+// Navegación a un CONJUNTO de celdas-meta. En cada paso se recalcula
+// la más cercana, así que si nos acercamos a otra del set durante el
+// viaje, el siguiente paso ya apunta a esa.
++!navigate_to_any(Cells) <-
+    !clear_nav_state;
+    .print("Navegando a uno de ", Cells, " (target dinámico)");
+    !navigate_to(0, 0, set(Cells)).
 
 
 // ═════════════════════════════════════════════════════════════
@@ -328,6 +355,24 @@ sign(X, 0)  :- X = 0.
 // sitios raros) entre los que estén libres.
 // ═════════════════════════════════════════════════════════════
 
+// Variante set: el "objetivo" para ordenar candidatos de escape se
+// recomputa como la celda del set más cercana al bloqueado actual.
++!escape_around(BX, BY, _, _, set(Cells)) :
+    .my_name(Me) & at(Me, CX, CY)
+<-
+    !sort_by_distance(Cells, CX, CY, GoalSorted);
+    [pos(TX, TY) | _] = GoalSorted;
+    DX = BX - CX;
+    DY = BY - CY;
+    P1X = CX - DY; P1Y = CY + DX;
+    P2X = CX + DY; P2Y = CY - DX;
+    BKX = CX - DX; BKY = CY - DY;
+    Cand = [pos(P1X, P1Y), pos(P2X, P2Y), pos(BKX, BKY)];
+    !sort_by_distance(Cand, TX, TY, Sorted);
+    !pick_escape_cell(Sorted, EX, EY);
+    .print("Escape lateral set (", EX, ",", EY, ") rodeando bloqueador en (", BX, ",", BY, ")");
+    !try_move(EX, EY, TX, TY, set(Cells)).
+
 +!escape_around(BX, BY, TX, TY, Mode) :
     .my_name(Me) & at(Me, CX, CY)
 <-
@@ -389,50 +434,14 @@ sign(X, 0)  :- X = 0.
 
 
 // ═════════════════════════════════════════════════════════════
-// NAVEGACIÓN A SHELF (vía casillas adyacentes accesibles)
+// NAVEGACIÓN A SHELF (target dinámico entre celdas adyacentes)
 // ═════════════════════════════════════════════════════════════
 
-shelf_adj_candidates([]).
-
 +!navigate_to_shelf(Shelf) <-
-    !clear_nav_state;
     get_shelf_adjacent(Shelf);
-    .my_name(Me);
-    see;
-    ?at(Me, CX, CY);
-    ?shelf_adjacent(Shelf, AllCells);
-    !sort_by_distance(AllCells, CX, CY, Sorted);
-    -+shelf_adj_candidates(Sorted);
-    !try_shelf_candidates(Shelf).
-
-+!try_shelf_candidates(Shelf) :
-    shelf_adj_candidates([pos(TX,TY)|Rest]) & robot(_, TX, TY)
-<-
-    -+shelf_adj_candidates(Rest);
-    .print("Casilla (", TX, ",", TY, ") ocupada por robot, saltando...");
-    !try_shelf_candidates(Shelf).
-
-+!try_shelf_candidates(Shelf) :
-    shelf_adj_candidates([pos(TX,TY)|Rest])
-<-
-    -+shelf_adj_candidates(Rest);
-    .print("Intentando casilla adyacente a ", Shelf, ": (", TX, ",", TY, ")");
-    !navigate_to(TX, TY, adjacent(false));
-    .my_name(Me);
-    see;
-    ?at(Me, AX, AY);
-    if (AX == TX & AY == TY) {
-        .print("Llegué junto a ", Shelf, " en (", TX, ",", TY, ")")
-    } else {
-        .print("No pude llegar a (", TX, ",", TY, "), probando siguiente...");
-        !try_shelf_candidates(Shelf)
-    }.
-
-+!try_shelf_candidates(Shelf) :
-    shelf_adj_candidates([])
-<-
-    .print("Sin casillas accesibles para ", Shelf);
-    .fail.
+    ?shelf_adjacent(Shelf, Cells);
+    .print("Navegando a ", Shelf, " (target dinámico entre ", Cells, ")");
+    !navigate_to_any(Cells).
 
 
 // ═════════════════════════════════════════════════════════════

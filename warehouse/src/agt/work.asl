@@ -1278,15 +1278,14 @@ owned_dim(CId, Shelf, W, V) :- delegated_stored(CId, Shelf, W, V).
     W = EW; V = EV.
 +!get_exit_dim(_, 0, 0).
 
-// Elige una celda libre de la zona de salida y navega adyacente a ella.
-// Reutiliza sort_by_distance de mov.asl (lista de pos(X,Y)).
+// Navega a la zona de salida con target dinámico: en cada paso
+// recalcula cuál celda exit es la más cercana, así que si nos
+// acercamos a otra durante el viaje, el siguiente paso ya apunta a
+// esa. Devuelve en (X,Y) la celda donde efectivamente aterrizamos.
 +!go_to_exit_cell(X, Y) <-
     .findall(pos(EX, EY), exit_cell(EX, EY), Cells);
+    !navigate_to_any(Cells);
     .my_name(Me);
     see;
     ?at(Me, RX, RY);
-    !sort_by_distance(Cells, RX, RY, Sorted);
-    [pos(FX, FY) | _] = Sorted;
-    X = FX; Y = FY;
-    !clear_nav_state;
-    !navigate_adjacent(FX, FY).
+    X = RX; Y = RY.
