@@ -229,15 +229,20 @@ sign(X, 0)  :- X = 0.
     .my_name(Me);
     ?at(Me, CX, CY);
 
-    -+prev_pos(CX, CY);
-    +visited(CX, CY);
     step(NX, NY);
     -+last_move(pos(NX, NY));
 
     if (error(blocked_by_agent, _)) {
+        // El step NO se completó: NO marcamos visited/prev_pos para
+        // no penalizar la celda actual ni "considerarla mala". El
+        // bloqueador queda registrado como `robot(_, NX, NY)` y los
+        // try_fresh siguientes ya lo filtran de forma natural.
         .print("Bloqueado en (", NX, ",", NY, ") → resolución");
         !handle_block(NX, NY, TX, TY, Mode)
     } else {
+        // Step exitoso: registramos el rastro.
+        -+prev_pos(CX, CY);
+        +visited(CX, CY);
         -+block_streak(0);
         !navigate_to(TX, TY, Mode)
     }.
@@ -293,40 +298,68 @@ sign(X, 0)  :- X = 0.
 
 
 // ── Decidir según prioridad obtenida ────────────────────────────
-//   OtherP = -1   → estático/sin respuesta: escape sin esperar.
-//   OtherP < MyP  → más prioridad que yo: cedo, escape alrededor.
-//   OtherP > MyP  → menos prioridad: espero; si insiste, escape.
-//   OtherP = MyP  → empate: backoff aleatorio; si insiste, escape.
+//   Convención: número de prioridad MENOR == prioridad MAYOR.
+//
+//   OtherP = -1   → bloqueador estático / sin respuesta: escape
+//                   alrededor sin esperar (último recurso clásico).
+//   Ambos en marcha (OtherP > -1):
+//     OtherP < MyP  → el otro tiene más prioridad. CEDO: espero
+//                     timePerMove y re-navego al MISMO destino. Si
+//                     tras N intentos sigue sin avanzar, escape.
+//     OtherP > MyP  → yo tengo más prioridad. Lo RODEO como un
+//                     obstáculo cualquiera: re-navego sin esperar y
+//                     sin escape. next_step ya filtra `robot(_, _, _)`,
+//                     así que el path natural escoge una alternativa.
+//                     No marcamos visited/prev_pos espurios (eso lo
+//                     garantiza try_move solo en step exitoso).
+//     OtherP = MyP  → empate. Desempate determinista por nombre
+//                     (átomo menor alfabéticamente actúa como
+//                     prioritario, el otro cede).
 
 +!decide_block(_, NX, NY, TX, TY, _, -1, _, Mode) <-
     .print("Bloqueador estático/sin respuesta → escape sin esperar");
     -+block_streak(0);
     !escape_around(NX, NY, TX, TY, Mode).
 
-+!decide_block(Other, NX, NY, TX, TY, MyP, OtherP, _, Mode) : OtherP < MyP <-
-    .print("Cedo paso a ", Other, " (prioridad ", OtherP, " < mía ", MyP, ")");
-    -+block_streak(0);
-    !escape_around(NX, NY, TX, TY, Mode).
-
-+!decide_block(Other, NX, NY, TX, TY, MyP, OtherP, NBC, Mode) : OtherP > MyP <-
-    .wait(200);
+// Yo cedo (el otro tiene más prioridad)
++!decide_block(Other, NX, NY, TX, TY, MyP, OtherP, NBC, Mode) :
+    OtherP < MyP & timePerMove(T)
+<-
+    .wait(T);
     if (NBC >= 3) {
-        .print(Other, " no cede tras ", NBC, " intentos → escape lateral");
+        .print(Other, " no avanza tras ", NBC, " intentos → escape lateral");
         -+block_streak(0);
         !escape_around(NX, NY, TX, TY, Mode)
     } else {
+        .print("Cedo paso a ", Other, " (prio ", OtherP, " < mía ", MyP, ") — esperé timePerMove");
         !navigate_to(TX, TY, Mode)
     }.
 
-+!decide_block(_, NX, NY, TX, TY, _, _, NBC, Mode) <-
-    .random(R);
-    W = math.round(R * 300) + 100;
-    .wait(W);
-    if (NBC >= 3) {
+// Yo tengo más prioridad: rodeo al otro como si fuese un obstáculo
++!decide_block(Other, _, _, TX, TY, MyP, OtherP, _, Mode) : OtherP > MyP <-
+    .print("Más prioritario que ", Other, " (mía ", MyP, " < su ", OtherP, ") — lo rodeo como obstáculo");
+    -+block_streak(0);
+    !navigate_to(TX, TY, Mode).
+
+// Empate: desempate alfabético por nombre del agente
++!decide_block(Other, NX, NY, TX, TY, _, _, NBC, Mode) <-
+    .my_name(Me);
+    .sort([Me, Other], [First | _]);
+    if (First == Me) {
+        .print("Empate de prioridad con ", Other, " — gano desempate por nombre, lo rodeo");
         -+block_streak(0);
-        !escape_around(NX, NY, TX, TY, Mode)
-    } else {
         !navigate_to(TX, TY, Mode)
+    } else {
+        ?timePerMove(T);
+        .wait(T);
+        if (NBC >= 3) {
+            .print(Other, " no avanza tras ", NBC, " intentos → escape lateral");
+            -+block_streak(0);
+            !escape_around(NX, NY, TX, TY, Mode)
+        } else {
+            .print("Empate de prioridad con ", Other, " — cedo por nombre, esperé timePerMove");
+            !navigate_to(TX, TY, Mode)
+        }
     }.
 
 

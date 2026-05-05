@@ -13,7 +13,7 @@ public class Robot {
     private int x, y;
     private Container carriedContainer;
     private String lastContainerID;
-    private boolean busy;
+ 
     private String currentTask;
     
     
@@ -27,7 +27,6 @@ public class Robot {
         this.x = 0;
         this.y = 0;
         this.carriedContainer = null;
-        this.busy = false;
         this.currentTask = null;
     }
     
@@ -41,13 +40,11 @@ public class Robot {
     public int getX() { return x; }
     public int getY() { return y; }
     public Container getCarriedContainer() { return carriedContainer; }
-    public boolean isBusy() { return busy; }
     public String getCurrentTask() { return currentTask; }
     public String getLastContainerID() { return lastContainerID; }
 
     // Setters
     public void setPosition(int x, int y) { this.x = x; this.y = y; }
-    public void setBusy(boolean busy) { this.busy = busy; }
     public void setCurrentTask(String task) { this.currentTask = task; }
     
     //get y modify del tiempo, esto es para el algoritmo de planificacion de ruta...
@@ -104,8 +101,8 @@ public class Robot {
     @Override
     public String toString() {
         String carrying = isCarrying() ? carriedContainer.getId() : "none";
-        return String.format("Robot[%s(%s): @(%d,%d), carrying=%s, busy=%s]", 
-            id, type, x, y, carrying, busy);
+        return String.format("Robot[%s(%s): @(%d,%d), carrying=%s]", 
+            id, type, x, y, carrying);
     }
 
 
