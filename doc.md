@@ -932,36 +932,95 @@ de `commit_shelf`.
 
 #### 2.4.6 Planes de navegación (en `mov.asl`)
 
-**`navigate_to(TX, TY, adjacent(Bool))`:** llegar exacto o quedar
-adyacente. La condición de parada se evalúa al inicio de cada
-iteración.
+**Ciclo de vida del viaje.** Toda navegación arranca con
+`!clear_nav_state`, que limpia `visited/2`, `last_move/1`, resetea
+`prev_pos`, `block_streak` y `best_dist`, y **añade el belief
+`+moving`**. Termina con `!end_nav` que retira `moving`. Mientras
+esté activo, la regla derivada
 
-**`next_step(CX, CY, TX, TY, NX, NY)`:** decide la siguiente
-celda candidata. **Prioriza eje Y** siempre; X solo cuando ya
-estamos alineados en Y.
+```jason
+current_priority(P) :- moving & priority(P).
+```
+
+es consultable por otros robots vía `.send(Other, askOne, current_priority(_), Reply, 200)`.
+Si el otro robot está parado (sin `moving`) o no responde dentro
+del timeout, `parse_priority_reply` devuelve `-1` y el bloqueador
+se trata como **estático**.
+
+**Modos de llegada.** `navigate_to/3` admite tres modos:
+
+- `adjacent(false)`: parada cuando `at(Me, TX, TY)` (exacto).
+- `adjacent(true)`: parada cuando `|TX-CX| + |TY-CY| ≤ 1`.
+- `set(Cells)`: parada cuando estoy en alguna celda del conjunto.
+  En cada iteración se recalcula la celda-meta más cercana, así
+  que si nos acercamos a otra del set durante el viaje, el siguiente
+  paso ya apunta a esa.
+
+`navigate_to_any(Cells)` es el atajo para target dinámico, y
+`navigate_to_shelf(Shelf)` lo usa internamente: pide
+`shelf_adjacent(Shelf, Cells)` al entorno y delega.
+
+**`maybe_reset_visited(TX, TY, CX, CY)`:** cuando la distancia
+Manhattan al destino mejora el mínimo visto (`best_dist`), borra
+toda la tabla `visited/2`. Evita quedarse atrapado cuando el
+greedy nos metió en un callejón y ya conseguimos salir de él.
+
+**`next_step(CX, CY, TX, TY, NX, NY)`:** decide la siguiente celda
+candidata. **Prioriza eje Y** siempre; X solo cuando ya estamos
+alineados en Y. Devuelve una lista ordenada de 4 candidatos que
+pasa a `choose_valid`.
 
 **Validación en 3 pasadas (`choose_valid`):**
 1. Pasada 1 (`try_fresh`): no visitado y no `prev_pos` (el óptimo).
-2. Pasada 2 (`try_visited`): permite visitados, ordena por
-   distancia.
+2. Pasada 2 (`try_visited`): permite visitados, sin `prev_pos`,
+   ordenados por distancia al objetivo.
 3. Pasada 3 (`try_prev`): permite todo incluido `prev_pos`. Si
    nada vale, falla.
 
-**`try_move`:** espera `timePerMove` (×1.15 si frágil), guarda
-`prev_pos` y `visited`, ejecuta `step(NX, NY)`. Si
-`error(blocked_by_agent, _)`, llama `handle_block` (resolución
-por prioridades + escape perpendicular si insiste).
+**`try_move`:** espera `timePerMove` (×1.15 si `carrying_fragile`),
+ejecuta `step(NX, NY)` y bifurca:
 
-**`handle_block`:**
-- Comparar prioridades: si el otro tiene **mayor prioridad**
-  (número menor) → cedo (`escape_move`).
-- Si yo tengo más prioridad → espero 200 ms; si tras 3 bloqueos
-  no cede → escape.
-- Misma prioridad → backoff aleatorio 100–400 ms.
+- **Step exitoso** → marca `prev_pos(CX, CY)` + `+visited(CX, CY)`,
+  resetea `block_streak`, recursión `navigate_to`.
+- **`error(blocked_by_agent, _)`** → **NO marca visited ni
+  prev_pos**: la celda actual no es "mala", solo había alguien en
+  la siguiente. El bloqueador queda registrado como
+  `robot(_, NX, NY)` y los `try_fresh` siguientes lo filtran de
+  forma natural. Llama a `handle_block`.
 
-**`navigate_to_shelf(Shelf)`:** pide al entorno
-`shelf_adjacent(Shelf, Cells)`, ordena por distancia y va probando
-candidatos. Si llega a uno → ok; si no, siguiente.
+Recuperación defensiva: si `step` falla por motivo distinto al
+bloqueo (oob, excepción), `-!try_move` limpia estado y reintenta
+una vez antes de propagar el fallo.
+
+**`handle_block`:** incrementa `block_streak`, refresca percepts
+con `see` y delega en `resolve_block`. Si percibe `robot(Other, NX, NY)`
+en la celda destino, consulta su prioridad real con
+`query_priority` (askOne con timeout 200 ms) y entra a `decide_block`.
+Si **no hay** robot percibido (bloqueo fantasma), backoff
+aleatorio 100–400 ms y reintento; tras 3 bloqueos consecutivos,
+`escape_around` sin prioridad.
+
+**`decide_block(Other, NX, NY, TX, TY, MyP, OtherP, NBC, Mode)`:**
+convención **número menor = más prioritario**.
+
+| Caso                     | Acción                                                                 |
+|--------------------------|------------------------------------------------------------------------|
+| `OtherP = -1` (estático) | Escape lateral inmediato sin esperar.                                  |
+| `OtherP < MyP`           | **Cedo**: espero `timePerMove` y re-navego. Tras 3 intentos → escape. |
+| `OtherP > MyP`           | **Rodeo**: re-navego sin esperar; `next_step` ya filtra el robot. No marcamos visited/prev_pos espurios (lo garantiza `try_move`). |
+| `OtherP = MyP` (empate)  | Desempate alfabético por nombre: el átomo menor gana y rodea, el otro cede como en el caso `OtherP < MyP`. |
+
+**`escape_around(BX, BY, TX, TY, Mode)` — blocker-aware:** dado el
+bloqueador en `(BX, BY)`, calcula las dos celdas perpendiculares
+rotando 90° el vector de aproximación `(BX-CX, BY-CY)`, más un
+backstep como último recurso. Las tres se ordenan por distancia
+Manhattan al destino para elegir el lateral que **nos acerca** al
+objetivo entre los libres. El `try_move` sobre la celda elegida
+deja que `navigate_to` recompute la ruta tras el paso lateral.
+
+La variante `set(Cells)` recalcula primero la celda-meta del
+conjunto antes de ordenar los candidatos de escape, así
+seguimos coherentes con el target dinámico.
 
 ---
 
