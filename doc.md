@@ -16,8 +16,31 @@ robots autónomos. El flujo, visto desde fuera, es el siguiente:
 
 1. Un **generador externo** (hilo Java) produce contenedores cada
    5–10 s en una zona de entrada. Cada contenedor tiene un peso
-   aleatorio, unas dimensiones (1×1, 1×2, 2×2 o 2×3) y un tipo
-   (`standard`, `fragile` o `urgent`).
+   aleatorio, unas dimensiones (1×1, 1×2, 2×2 o 2×3) y una **lista
+   de etiquetas** (tags) que pueden combinarse:
+   - `[standard]` — paquete normal (sin atributos especiales).
+   - `[urgent]` — urgente puro (sale en el deadline corto).
+   - `[fragile]` — frágil puro (los robots se mueven al 85 % de
+     velocidad — penalización del 15 % — al cargarlo).
+   - `[urgent, fragile]` — **combo**: urgente Y frágil al mismo
+     tiempo. Se trata como urgente para deadlines (sale en el corto)
+     y como frágil para el movimiento. Distinguible en la GUI por un
+     color magenta intenso.
+
+   Probabilidades de generación (conservando la de `standard`):
+
+   | Tags                | Probabilidad |
+   |---------------------|--------------|
+   | `[standard]`        | 0.70         |
+   | `[urgent]`          | 0.13875      |
+   | `[fragile]`         | 0.13875      |
+   | `[urgent, fragile]` | 0.0225 (= 0.15 × 0.15) |
+
+   El bloqueo de generación durante un ciclo de salida es por
+   **grupo** (`urgent` | `normal`), no por etiqueta individual:
+   bloquear `urgent` impide TODOS los combos con la etiqueta
+   urgent (puro y combo). Bloquear `normal` impide los combos
+   sin urgent (`[standard]` y `[fragile]`).
 2. Cuatro **robots reponedores** con capacidades distintas (light,
    medium, heavy, heavy2) los recogen, eligen una **estantería**
    compatible y los almacenan.
@@ -41,9 +64,9 @@ El sistema combina dos capas claramente separadas:
 │  ┌─────────┐  ┌──────────┐  ┌──────────┐  ┌────────────┐       │
 │  │ robot_* │  │ scheduler│  │supervisor│  │ transport  │       │
 │  └────┬────┘  └────┬─────┘  └────┬─────┘  └─────┬──────┘       │
-│       │            │             │               │              │
-│       │  mensajes (.send, .broadcast) + percepts (env)          │
-└───────┼────────────┼─────────────┼───────────────┼──────────────┘
+│       │            │             │               │             │
+│       │  mensajes (.send, .broadcast) + percepts (env)         │
+└───────┼────────────┼─────────────┼───────────────┼─────────────┘
         ▼            ▼             ▼               ▼
 ┌────────────────────────────────────────────────────────────────┐
 │            CAPA DE ENTORNO Y MODELO (Java)                     │
@@ -72,19 +95,23 @@ El grid es de **20×15** celdas:
 | Entrada         | `x ∈ [5..7], y ∈ [0..1]` | Verde     |
 | Pasillos EMPTY  | `(x,2)` con x∈[3..7], `(8,0)`, `(8,1)` | Blanco |
 
-**Estanterías** (9 en total, multi-celda):
+**Estanterías** (9 en total, multi-celda). La aceptación se decide
+por presencia/ausencia de la etiqueta `urgent`: shelves "urgent"
+admiten cualquier paquete con `urgent` en sus tags (puro o combo
+con `fragile`); shelves "regular" admiten cualquier paquete sin
+`urgent` (standard puro o fragile puro):
 
-| Shelf      | Origen (x,y) | Tamaño | Cap. peso | Cap. vol | Tipo admitido       |
-|------------|--------------|--------|-----------|----------|---------------------|
-| shelf_1    | (10, 2)      | 2×2    | 50 kg     | 8 u      | urgent              |
-| shelf_2    | (12, 2)      | 2×2    | 50 kg     | 8 u      | standard / fragile  |
-| shelf_3    | (14, 2)      | 2×2    | 50 kg     | 8 u      | standard / fragile  |
-| shelf_4    | (16, 2)      | 2×2    | 50 kg     | 8 u      | standard / fragile  |
-| shelf_5    | (10, 6)      | 3×2    | 100 kg    | 12 u     | urgent              |
-| shelf_6    | (13, 6)      | 3×2    | 100 kg    | 12 u     | standard / fragile  |
-| shelf_7    | (16, 6)      | 3×2    | 100 kg    | 12 u     | standard / fragile  |
-| shelf_8    | (10, 10)     | 4×3    | 200 kg    | 20 u     | urgent              |
-| shelf_9    | (14, 10)     | 4×3    | 200 kg    | 20 u     | standard / fragile  |
+| Shelf      | Origen (x,y) | Tamaño | Cap. peso | Cap. vol | Tags admitidos             |
+|------------|--------------|--------|-----------|----------|----------------------------|
+| shelf_1    | (10, 2)      | 2×2    | 50 kg     | 8 u      | con `urgent` (puro o combo) |
+| shelf_2    | (12, 2)      | 2×2    | 50 kg     | 8 u      | sin `urgent` (standard / fragile) |
+| shelf_3    | (14, 2)      | 2×2    | 50 kg     | 8 u      | sin `urgent` (standard / fragile) |
+| shelf_4    | (16, 2)      | 2×2    | 50 kg     | 8 u      | sin `urgent` (standard / fragile) |
+| shelf_5    | (10, 6)      | 3×2    | 100 kg    | 12 u     | con `urgent` (puro o combo) |
+| shelf_6    | (13, 6)      | 3×2    | 100 kg    | 12 u     | sin `urgent` (standard / fragile) |
+| shelf_7    | (16, 6)      | 3×2    | 100 kg    | 12 u     | sin `urgent` (standard / fragile) |
+| shelf_8    | (10, 10)     | 4×3    | 200 kg    | 20 u     | con `urgent` (puro o combo) |
+| shelf_9    | (14, 10)     | 4×3    | 200 kg    | 20 u     | sin `urgent` (standard / fragile) |
 
 ### 1.4 Agentes y propósito
 
@@ -117,9 +144,10 @@ explícitamente: solo anuncia.
 #### Responsabilidades
 
 1. **Anunciar nuevos contenedores** a los cuatro robots vía
-   `container_available(CId, W, H, Weight, Type)` en cuanto el
-   entorno emite `+new_container(CId)`.
-2. **Cachear `package_info`** (peso/volumen/tipo) y reenviárselo al
+   `container_available(CId, W, H, Weight, Tags)` en cuanto el
+   entorno emite `+new_container(CId)`. `Tags` es una **lista de
+   etiquetas** Jason (p. ej. `[urgent, fragile]`).
+2. **Cachear `package_info`** (peso/volumen/tags) y reenviárselo al
    supervisor (`package_arrived`).
 3. **Garantizar accesibilidad**: ante un nuevo contenedor lanza
    un BFS sobre todos los paquetes pendientes; si alguno quedó
@@ -134,9 +162,10 @@ explícitamente: solo anuncia.
    degenerado `package_stored(...,0,0,unknown)` cuando hay races
    con `container_exited`/`container_destroyed` previos).
 6. **Disparar y orquestar el ciclo de salida** cuando recibe
-   `no_space(Type)` del supervisor, `force_exit_cycle(Type)` de un
-   robot o cuando se acumulan ≥ `unstorable_threshold` (=3)
-   paquetes que ningún robot pudo almacenar en un grupo.
+   `no_space(Group)` del supervisor (donde `Group ∈ {urgent, normal}`),
+   `force_exit_cycle(Tags)` de un robot o cuando se acumulan
+   ≥ `unstorable_threshold` (=3) paquetes que ningún robot pudo
+   almacenar en un grupo.
 7. **Gestionar la cola de deadlines pendientes** (FIFO con dedup):
    si llega un trigger durante un ciclo activo, se encola y se
    ejecuta en cadena al cerrar el actual sin liberar el lock
@@ -152,9 +181,18 @@ tiene `shelf_location/3`, `zone_cell/2`, `classification_cell/2`,
 `empty_exit/2` y `exit_cell/2` para no depender del entorno en
 cada decisión.
 
-Define `type_group/2` para agrupar tipos en `urgent` y `normal`
-(standard + fragile comparten shelves), y la regla derivada
-`blocked_type(Type) :- type_group(Type, G) & blocked_group(G)`.
+Define `tags_group/2` para mapear la lista de etiquetas de un paquete a
+uno de los dos grupos:
+
+```jason
+tags_group(Tags, urgent) :- .member(urgent, Tags).
+tags_group(Tags, normal) :- not .member(urgent, Tags).
+```
+
+(antes era `type_group(Type, Group)` indexado por átomo). Y la regla
+derivada `blocked_tags(Tags) :- tags_group(Tags, G) & blocked_group(G)`.
+La etiqueta `fragile` no afecta al grupo de salida — solo activa la
+penalización de movimiento (`carrying_fragile` en `mov.asl`).
 
 #### Planes principales del scheduler
 
@@ -167,19 +205,20 @@ Define `type_group/2` para agrupar tipos en `urgent` y `normal`
     !check_all_packages;
     get_container_info(CId).
 
-+container_info(CId, W, H, Weight, Type) <-
++container_info(CId, W, H, Weight, Tags) <-
     V = W * H;
     .abolish(package_info(CId, _, _, _));
-    +package_info(CId, Weight, V, Type);
-    .send(supervisor, tell, package_arrived(CId, Weight, V, Type));
-    !announce_if_allowed(CId, W, H, Weight, Type);
-    -container_info(CId, W, H, Weight, Type).
+    +package_info(CId, Weight, V, Tags);
+    .send(supervisor, tell, package_arrived(CId, Weight, V, Tags));
+    !announce_if_allowed(CId, W, H, Weight, Tags);
+    -container_info(CId, W, H, Weight, Tags).
 ```
 
 `announce_if_allowed`:
-- Si `blocked_type(Type)` (tipo bloqueado por ciclo activo): se
-  guarda como `pending_announce(CId, W, H, Weight, Type)` y se
-  publicará al terminar el ciclo (vía `flush_all_pending_announce`).
+- Si `blocked_tags(Tags)` (grupo del paquete bloqueado por ciclo
+  activo): se guarda como
+  `pending_announce(CId, W, H, Weight, Tags)` y se publicará al
+  terminar el ciclo (vía `flush_all_pending_announce`).
 - Si no, se hace `.send(robot_*, tell, container_available(...))`
   a los cuatro robots.
 
@@ -215,16 +254,17 @@ conectan con el resto del almacén). Si nunca llega a ninguna,
 Tres formas de arrancar un ciclo:
 
 1. **Supervisor** detecta saturación ≥ 70 % de un grupo:
-   `no_space(Type)[source(supervisor)]` → `begin_exit_cycle(Group)`.
+   `no_space(Group)[source(supervisor)]` → `begin_exit_cycle(Group)`.
+   El supervisor envía directamente el grupo (`urgent | normal`).
 2. **Acumulación de unstorable**: cada vez que un robot envía
-   `tell unstorable(CId, Type)`, scheduler hace
-   `record_unstorable(CId, Group)` y comprueba el umbral
-   (`unstorable_threshold(3)`). Al alcanzarlo:
+   `tell unstorable(CId, Tags)`, scheduler resuelve
+   `tags_group(Tags, Group)`, hace `record_unstorable(CId, Group)`
+   y comprueba el umbral (`unstorable_threshold(3)`). Al alcanzarlo:
    `begin_exit_cycle(Group)`.
 3. **Caso límite — robot fuerza ciclo**: un robot cargado que ya
    no puede colocar el paquete envía
-   `tell force_exit_cycle(Type)`; se traduce a
-   `begin_exit_cycle(Group)`.
+   `tell force_exit_cycle(Tags)`; se traduce a
+   `begin_exit_cycle(Group)` (con `tags_group(Tags, Group)`).
 
 Si ya hay un ciclo activo (`exit_cycle_active`), el trigger se
 encola con dedup en `pending_queue`.
@@ -247,39 +287,41 @@ encola con dedup en `pending_queue`.
 
 `run_deadline_for` despacha al deadline correcto:
 
-| Group   | Deadline | Tipos               | Duración           | Shelves          |
-|---------|----------|---------------------|--------------------|------------------|
-| urgent  | short    | `[urgent]`          | `ΔT  = 30 000 ms`  | 1, 5, 8          |
-| normal  | long     | `[standard, fragile]`| `3·ΔT = 90 000 ms` | 2, 3, 4, 6, 7, 9 |
+| Group   | Deadline | Tags incluidos                 | Duración           | Shelves          |
+|---------|----------|--------------------------------|--------------------|------------------|
+| urgent  | short    | con `urgent` (puro o combo)    | `ΔT  = 30 000 ms`  | 1, 5, 8          |
+| normal  | long     | sin `urgent` (standard/fragile)| `3·ΔT = 90 000 ms` | 2, 3, 4, 6, 7, 9 |
 
 `block_group` llama a la acción del entorno
-`block_generation(Type)` por cada tipo del grupo y añade el
-hecho `blocked_group(Group)`.
+`block_generation(Group)` (un único token por grupo) y añade el
+hecho `blocked_group(Group)`. El entorno traduce el grupo al
+filtro de generación adecuado: `urgent` impide cualquier paquete
+con la etiqueta urgent (puro o combo); `normal` impide cualquier
+paquete sin urgent.
 
 `run_deadline`:
 
 ```jason
-+!run_deadline(Kind, Types, Factor) :
-        delta_t(DT) & trigger_group(Group) <-
++!run_deadline(Kind, Group, Factor) :
+        delta_t(DT) & trigger_group(_) <-
     Duration = DT * Factor;
     +active_deadline(Kind);
     +deadline_shipped_count(Kind, 0);
     log_event(deadline_started, Group);
-    .send(transport, tell, load_start(Kind, Types));
-    .send(supervisor, tell, deadline_started(Kind, Types, Duration));
+    .send(transport, tell, load_start(Kind, Group));
+    .send(supervisor, tell, deadline_started(Kind, Group, Duration));
     !broadcast_deadline_start(Kind);          // .broadcast(tell, active_deadline(Kind))
-    !publish_stored_items(Types, Kind);       // pide al supervisor list_stored
-    !publish_unstorable_items(Types, Kind);   // los pendientes no almacenables
+    !publish_stored_items(Group, Kind);       // pide al supervisor list_stored
+    !publish_unstorable_items(Group, Kind);   // los pendientes no almacenables
     .wait(Duration);
     !close_deadline(Kind).
 ```
 
-`publish_stored_items` pide al supervisor (`achieve list_stored`)
-la lista de paquetes almacenados de los tipos del deadline. El
-supervisor responde con
-`stored_list_response(Kind, [s(CId, Shelf, W, V, Type), ...])`.
+`publish_stored_items` pide al supervisor (`achieve list_stored(Group, Kind)`)
+la lista de paquetes almacenados del grupo. El supervisor responde con
+`stored_list_response(Kind, [s(CId, Shelf, W, V, Tags), ...])`.
 Para cada uno, scheduler emite a los **cuatro robots**
-`tell exit_item(CId, at_shelf(Shelf), W, V, Type, Kind)`.
+`tell exit_item(CId, at_shelf(Shelf), W, V, Tags, Kind)`.
 
 `publish_unstorable_items` hace lo análogo con los unstorable:
 primero **cosecha** los `pending_announce` del grupo
@@ -317,11 +359,11 @@ Cuando un robot escoge un `exit_item`, pide permiso:
 ##### Notificación de fin de tarea
 
 Cuando un robot deposita en la zona de salida envía
-`tell exit_done(CId, Type)`. El scheduler:
+`tell exit_done(CId, Tags)`. El scheduler:
 
 ```jason
-+exit_done(CId, Type)[source(Reporter)] <-
-    .send(transport, tell, container_shipped(CId, Type));
++exit_done(CId, Tags)[source(Reporter)] <-
+    .send(transport, tell, container_shipped(CId, Tags));
     !remove_from_unstorable(CId);
     !bump_shipped_count;            // incrementa deadline_shipped_count(K, _)
     -pending_exit(CId, _, _, _, _, _);
@@ -355,7 +397,7 @@ paralelo.
 ##### Limpieza por destrucción
 
 ```jason
-+container_destroyed(CId, Type) <-
++container_destroyed(CId, Tags) <-
     .abolish(package_info(CId, _, _, _));
     .abolish(pending_announce(CId, _, _, _, _));
     .abolish(claimed(CId));
@@ -365,7 +407,7 @@ paralelo.
     .broadcast(untell, exit_item(CId, _, _, _, _, _));
     .broadcast(untell, container_available(CId, _, _, _, _));
     .broadcast(untell, exit_taken(CId));
-    -container_destroyed(CId, Type).
+    -container_destroyed(CId, Tags).
 ```
 
 #### Estados implícitos del scheduler
@@ -383,8 +425,8 @@ No define un automaton explícito, pero opera en dos modos:
 ### 2.2 Agente `supervisor` — monitor
 
 **Objetivo principal**: mantener la fotografía real del almacén y
-detectar cuándo un grupo de tipos llega al **70 % de saturación**
-agregada para avisar al scheduler.
+detectar cuándo un grupo (urgent | normal) llega al **70 % de
+saturación** agregada para avisar al scheduler.
 
 #### Responsabilidades
 
@@ -393,37 +435,32 @@ agregada para avisar al scheduler.
 2. **Ocupación real de cada estantería** (`shelf_usage/3`),
    **derivada** (no acumulativa) de `stored_at`. Tras cada
    `package_stored`/`package_retrieved` se invoca
-   `recompute_shelf_usage(Shelf)`, que suma los `(W, V)` de los
-   `stored_at(_, Shelf, _, W, V)` vivos y reescribe `shelf_usage`
-   limpio. Beneficio: un evento perdido afecta como mucho a un
-   contenedor y se corrige al siguiente recompute, **nunca se
-   compone** con errores futuros (ya no hay drift acumulativo ni
-   posibilidad de valores negativos).
-3. **Registro `stored_at(CId, Shelf, Type, W, V)`**: qué paquete
-   está en qué estantería. Es la **única fuente de verdad** del
-   supervisor: tanto `shelf_usage` como las respuestas al scheduler
-   se derivan de aquí. Lo necesita el scheduler para construir la
-   lista de exit_items en cada deadline.
-4. **Disparar `no_space(Type)`** al scheduler cuando la suma
-   peso/volumen de las shelves del grupo supera 70 %, con
-   bloqueo `blocked_group_notified(Group)` para no spamear.
+   `recompute_shelf_usage(Shelf)`.
+3. **Registro `stored_at(CId, Shelf, Tags, W, V)`**: qué paquete
+   está en qué estantería, con su lista de etiquetas. Es la
+   **única fuente de verdad** del supervisor: tanto `shelf_usage`
+   como las respuestas al scheduler se derivan de aquí.
+4. **Disparar `no_space(Group)`** al scheduler cuando la suma
+   peso/volumen de las shelves del grupo (`urgent_shelf` o
+   `regular_shelf`) supera 70 %, con bloqueo
+   `blocked_group_notified(Group)` para no spamear.
 5. **Vigilancia temporal de deadlines**: arrancar un timer cuando
-   el scheduler le envía `deadline_started(Kind, Types, Duration)`
-   y, al expirar, auditar qué `at_warehouse(CId, Type, _, _)` de
-   esos tipos sigue en el almacén — cada pendiente cuenta como
-   incumplimiento informativo (`deadline_violations` ++) y emite
-   `log_event(deadline_missed, CId)`.
-6. **`list_stored(Types, Kind)`**: contestar al scheduler con la
-   lista de `s(CId, Shelf, W, V, Type)` de los stored_at de esos
-   tipos.
+   el scheduler le envía `deadline_started(Kind, Group, Duration)`
+   y, al expirar, auditar qué `at_warehouse(CId, Tags, _, _)` con
+   `tags_group(Tags, Group)` sigue en el almacén — cada pendiente
+   cuenta como incumplimiento informativo (`deadline_violations` ++)
+   y emite `log_event(deadline_missed, CId)`.
+6. **`list_stored(Group, Kind)`**: contestar al scheduler con la
+   lista de `s(CId, Shelf, W, V, Tags)` de los `stored_at` cuyo
+   grupo coincida con el solicitado.
 
 #### Planes principales
 
 ##### Recepción de paquetes
 
 ```jason
-+package_arrived(CId, Weight, Volume, Type)[source(scheduler)] <-
-    +at_warehouse(CId, Type, Weight, Volume);
++package_arrived(CId, Weight, Volume, Tags)[source(scheduler)] <-
+    +at_warehouse(CId, Tags, Weight, Volume);
     -package_arrived(...).
 ```
 
@@ -431,14 +468,14 @@ agregada para avisar al scheduler.
 
 ```jason
 @pkg_stored_known[atomic]
-+package_stored(CId, Shelf, Weight, Volume, Type)[source(scheduler)] :
++package_stored(CId, Shelf, Weight, Volume, Tags)[source(scheduler)] :
         shelf_capacity(Shelf, MaxW, MaxV) & total_stored(N) <-
-    +stored_at(CId, Shelf, Type, Weight, Volume);
+    +stored_at(CId, Shelf, Tags, Weight, Volume);
     !recompute_shelf_usage(Shelf);
     ?shelf_usage(Shelf, NewW, NewV);
     -+total_stored(N + 1);
     !check_shelf_limits(Shelf, NewW, NewV, MaxW, MaxV);
-    !check_type_space(Type);
+    !check_group_space(Tags);
     !broadcast_usage_snapshot;
     !calculate_statistics.
 ```
@@ -462,22 +499,23 @@ para que los robots reconcilien `shelf_usage_local`.
 ##### Comprobación de saturación por grupo
 
 ```jason
-+!check_type_space(Type) :
-        type_group(Type, Group) & blocked_group_notified(Group) <- true.
++!check_group_space(Tags) :
+        tags_group(Tags, Group) & blocked_group_notified(Group) <- true.
 
-+!check_type_space(Type) :
-        type_group(Type, Group) & type_full_ratio(R) <-
++!check_group_space(Tags) :
+        tags_group(Tags, Group) & type_full_ratio(R) <-
     !sum_group_usage(Group, UW, UV, MW, MV);
     if (MW > 0 & (UW >= MW * R | UV >= MV * R)) {
         +blocked_group_notified(Group);
-        log_event(no_space_detected, Type);
-        .send(scheduler, tell, no_space(Type))
+        log_event(no_space_detected, Group);
+        .send(scheduler, tell, no_space(Group))
     }.
 ```
 
 `sum_group_usage` agrega peso/volumen actual y máximo de **todas
-las shelves que admiten algún tipo del grupo** (con dedup para no
-contar shelves dos veces). El umbral es `type_full_ratio(0.7)`.
+las shelves del grupo** (`shelf_in_group(urgent, S) :- urgent_shelf(S)`,
+`shelf_in_group(normal, S) :- regular_shelf(S)`). El umbral es
+`type_full_ratio(0.7)`.
 
 ##### Liberación de espacio
 
@@ -520,19 +558,19 @@ no se tocan: son creencias propias sobre operaciones en vuelo.
 ##### Vigilancia temporal del deadline
 
 ```jason
-+deadline_started(Kind, Types, Duration)[source(scheduler)] <-
-    !watch_deadline(Kind, Types, Duration).
++deadline_started(Kind, Group, Duration)[source(scheduler)] <-
+    !watch_deadline(Kind, Group, Duration).
 
-+!watch_deadline(Kind, Types, Duration) <-
++!watch_deadline(Kind, Group, Duration) <-
     .wait(Duration);
-    !audit_deadline(Kind, Types).
+    !audit_deadline(Kind, Group).
 
-+!audit_deadline(Kind, Types) <-
-    .findall(p(CId, Ty),
-             (at_warehouse(CId, Ty, _, _) & .member(Ty, Types)),
++!audit_deadline(Kind, Group) <-
+    .findall(p(CId, Tags),
+             (at_warehouse(CId, Tags, _, _) & tags_group(Tags, Group)),
              Pending);
     .length(Pending, N);
-    !report_audit(Kind, Types, N, Pending).
+    !report_audit(Kind, Group, N, Pending).
 ```
 
 `report_audit` con `N > 0` incrementa `deadline_violations` y
@@ -566,8 +604,8 @@ avisa.
 en cada deadline. **No interactúa con el entorno**, solo registra.
 
 ```jason
-+load_start(Kind, Types)[source(scheduler)] <- ...
-+container_shipped(CId, Type)[source(scheduler)] <- ...
++load_start(Kind, Group)[source(scheduler)] <- ...
++container_shipped(CId, Tags)[source(scheduler)] <- ...
 +load_end(Kind, N)[source(scheduler)] : total_salidas(T) <-
     -total_salidas(T);
     +total_salidas(T+1).
@@ -605,11 +643,11 @@ La regla **"el robot más rápido capaz se queda con el paquete"**
 se aplica en `work.asl` con la guarda `not faster_capable`:
 
 ```jason
-+container_available(CId, W, H, Weight, Type) :
++container_available(CId, W, H, Weight, Tags) :
         can_i_manage(W, H, Weight) &
         not faster_capable(W, H, Weight) &
         not is_router_robot <-
-    !enqueue(CId, W, H, Weight, Type);
+    !enqueue(CId, W, H, Weight, Tags);
     .abolish(container_available(CId, _, _, _, _)).
 ```
 
@@ -684,7 +722,7 @@ exit_item  →  pick_best_exit_item (más cercano, can_i_manage_weight, can_i_ex
               ↓
    navigate_to_shelf → retrieve → carrying_exit → go_to_exit_cell → drop_at_exit
               ↓
-   tell exit_done(CId, Type) → -exit_in_progress → process_next
+   tell exit_done(CId, Tags) → -exit_in_progress → process_next
 ```
 
 #### 2.4.3 Estados del robot
@@ -699,29 +737,30 @@ Y un flag transversal:
 
 - `exit_in_progress(CId)`: hay un exit en curso. Bloquea
   `process_next` para no mezclar tareas.
-- `carrying_fragile`: paquete frágil en mano → `mov.asl` aplica
-  un +15 % al `timePerMove`.
-- `carrying_exit(CId, Type, Shelf, W, V)`: paquete del ciclo de
+- `carrying_fragile`: paquete con la etiqueta `fragile` en mano
+  (puede ser fragile puro o el combo `urgent+fragile`) → `mov.asl`
+  aplica un +15 % al `timePerMove`.
+- `carrying_exit(CId, Tags, Shelf, W, V)`: paquete del ciclo de
   salida en mano (necesario para re-shelf si el deadline expira).
 
 #### 2.4.4 Planes principales (vía `work.asl`)
 
 **Anuncio de contenedor (no-router):**
 ```jason
-+container_available(CId, W, H, Weight, Type) :
++container_available(CId, W, H, Weight, Tags) :
         can_i_manage(W, H, Weight) & not is_router_robot <-
-    !enqueue(CId, W, H, Weight, Type);
+    !enqueue(CId, W, H, Weight, Tags);
     .abolish(container_available(CId, _, _, _, _)).
 
-+container_available(CId, W, H, Weight, Type) : not is_router_robot <-
++container_available(CId, W, H, Weight, Tags) : not is_router_robot <-
     .abolish(container_available(CId, _, _, _, _)).
 ```
 
 **Anuncio de contenedor (heavy y heavy2 simétricos):**
 ```jason
-+container_available(CId, W, H, Weight, Type) :
++container_available(CId, W, H, Weight, Tags) :
         is_router_robot & can_i_manage(W, H, Weight) <-
-    !decide_heavy_peer(CId, W, H, Weight, Type);
+    !decide_heavy_peer(CId, W, H, Weight, Tags);
     .abolish(container_available(CId, _, _, _, _)).
 ```
 
@@ -733,19 +772,23 @@ espera 2 s su `heavy_peer_info(L, S)` y aplica
 3. empate de cola y ambos no-ocupados → idle gana sobre going_idle,
 4. empate absoluto → robot_heavy gana por nombre.
 
-**Encolado (urgentes a la cabeza):**
+**Encolado (paquetes con la etiqueta `urgent` van a la cabeza):**
 ```jason
-+!enqueue(CId, W, H, Weight, urgent) : container_queue(Q) <-
++!enqueue(CId, W, H, Weight, Tags) :
+        is_urgent_pkg(Tags) & container_queue(Q) <-
     -container_queue(_);
-    +container_queue([pkg(CId, Weight, W, H, urgent) | Q]);
+    +container_queue([pkg(CId, Weight, W, H, Tags) | Q]);
     !check_idle.
 
-+!enqueue(CId, W, H, Weight, Type) : container_queue(Q) <-
-    .concat(Q, [pkg(...)], NewQ);
++!enqueue(CId, W, H, Weight, Tags) : container_queue(Q) <-
+    .concat(Q, [pkg(CId, Weight, W, H, Tags)], NewQ);
     -container_queue(_);
     +container_queue(NewQ);
     !check_idle.
 ```
+
+donde `is_urgent_pkg(Tags) :- .member(urgent, Tags).` (cubre tanto
+`[urgent]` puro como `[urgent, fragile]`).
 
 **`check_idle` y `process_next`**: respetan `exit_in_progress`,
 priorizan `exit_item` sobre la cola normal cuando el robot está
@@ -757,11 +800,12 @@ estantería local, reserva, recoge, navega y deposita. Si
 local y prueba alternativas; si ninguna cabe, escala a
 `force_exit_carried` (caso límite).
 
-**Selección local de estantería:**
-- `urgent`: ordena `urgent_shelf` por distancia Manhattan y
-  devuelve la primera con hueco (peso+vol contando reservas).
-- regulares: usa `robot_shelf_priority` filtrada por
-  `regular_shelf` y blacklist.
+**Selección local de estantería (en función de `Tags`):**
+- Tags con `urgent` (puro o combo): ordena `urgent_shelf` por
+  distancia Manhattan y devuelve la primera con hueco
+  (peso+vol contando reservas).
+- Tags sin `urgent` (standard puro o fragile puro): usa
+  `robot_shelf_priority` filtrada por `regular_shelf` y blacklist.
 - `shelf_fits/4` suma `shelf_usage_local` + reservas (`findall +
   sum_rv`) y compara con la capacidad.
 
@@ -848,7 +892,7 @@ inflaría `shelf_fits` en estanterías que estarían realmente libres.
 
 **Recepción de exit_item:**
 ```jason
-+exit_item(CId, _, W, _, Type, Kind)[source(scheduler)] :
++exit_item(CId, _, W, _, Tags, Kind)[source(scheduler)] :
         can_i_manage_weight(W) <-
     !check_idle.
 ```
@@ -870,9 +914,9 @@ peers (más abajo) y, si tampoco, cae al `fallback_to_normal`.
 **Respuesta del claim:**
 ```jason
 +claim_result(CId, granted)[source(scheduler)] :
-        pending_claim(CId, Loc, Type) <-
+        pending_claim(CId, Loc, Tags) <-
     -pending_claim(...);
-    !execute_exit(CId, Loc, Type).
+    !execute_exit(CId, Loc, Tags).
 
 +claim_result(CId, denied)[source(scheduler)] :
         pending_claim(CId, _, _) <-
@@ -902,7 +946,7 @@ peers si necesitan ayuda. Handshake:
 
 ```
 A → all : help_request(A, MaxW)
-P → A   : help_offer(CId, Shelf, W, V, Type)   (uno por peer)
+P → A   : help_offer(CId, Shelf, W, V, Tags)   (uno por peer)
 A → P   : help_take(A, CId)                     (achieve)
 P → A   : help_confirm(...) | help_deny(CId)
 ```
@@ -925,13 +969,13 @@ dentro de los 800 ms que A espera por ofertas.
 
 **Caso límite — `force_exit_carried`:**
 ```jason
-+!force_exit_carried(CId, Type) <-
++!force_exit_carried(CId, Tags) <-
     !release_if_reserved(CId);
     !go_to_exit_cell(EX, EY);
     drop_at_exit(EX, EY);
     log_event(container_delivered, CId);
     !unmark_fragile;
-    .send(scheduler, tell, force_exit_cycle(Type)).
+    .send(scheduler, tell, force_exit_cycle(Tags)).
 ```
 
 `release_if_reserved` es defensivo: aunque el caller usual
@@ -1052,10 +1096,10 @@ error añaden un percept `error(Type, Data)` al agente.
 | `retrieve(CId)`             | Robots       | Saca un contenedor almacenado en una shelf adyacente|
 | `relocate_container(CId, X, Y)` | Scheduler | Mueve un paquete en clasificación a otra celda      |
 | `see`                       | Robots       | Refresca percepts de visión (radio Manhattan = 1)   |
-| `get_container_info(CId)`   | Scheduler   | Devuelve `container_info(CId, W, H, Weight, Type)`  |
+| `get_container_info(CId)`   | Scheduler   | Devuelve `container_info(CId, W, H, Weight, Tags)`  |
 | `get_shelf_adjacent(SId)`   | Robots      | Devuelve celdas no-shelf adyacentes a un shelf      |
-| `block_generation(Type)`    | Scheduler   | Pausa generación del tipo                           |
-| `unblock_generation(Type)`  | Scheduler   | Reanuda                                             |
+| `block_generation(Group)`   | Scheduler   | Pausa generación de un grupo (`urgent` \| `normal`) |
+| `unblock_generation(Group)` | Scheduler   | Reanuda                                             |
 | `log_event(Type, Data)`     | Cualquiera  | Emite línea EVENT en consola y `eventlog.txt`       |
 
 ### 3.2 Eventos / percepts del entorno hacia agentes
@@ -1069,11 +1113,11 @@ error añaden un percept `error(Type, Data)` al agente.
 | `error(Type, Data)`                      | Agente que falló   | Cualquier acción con error        |
 | `container_at(CId, X, Y)`                | Scheduler          | Generación + relocate             |
 | `occupied(X, Y)`                         | Scheduler          | Cambia ocupación de celda         |
-| `container_destroyed(CId, Type)`         | **Todos**          | Robot pisa paquete sin recoger    |
-| `container_exited(CId, Type, W, V)`      | Scheduler + Sup.   | `drop_at_exit` exitoso            |
+| `container_destroyed(CId, Tags)`         | **Todos**          | Robot pisa paquete sin recoger    |
+| `container_exited(CId, Tags, W, V)`      | Scheduler + Sup.   | `drop_at_exit` exitoso            |
 | `package_retrieved(CId, Shelf, W, V)`    | Supervisor         | `retrieve` exitoso                |
 | `container_relocated(CId, X, Y)`         | Robots             | Tras `relocate_container`         |
-| `container_info(CId, W, H, Weight, Type)`| Quien preguntó    | Tras `get_container_info`         |
+| `container_info(CId, W, H, Weight, Tags)`| Quien preguntó    | Tras `get_container_info`         |
 | `shelf_adjacent(SId, [pos(X,Y),...])`    | Quien preguntó    | Tras `get_shelf_adjacent`         |
 | `total_errors(ErrorType, GlobalTotal)`   | Supervisor        | Cada vez que se acumula un error  |
 
@@ -1082,7 +1126,8 @@ error añaden un percept `error(Type, Data)` al agente.
 El generador de contenedores (`startContainerGenerator`) corre en
 un `ExecutorService` daemon dedicado (`ContainerGenerator`). Las
 acciones de los agentes se ejecutan en los hilos de Jason. Por
-eso `blockedGenerationTypes` es un `ConcurrentHashMap.newKeySet()`,
+eso `blockedGenerationTypes` (set de grupos bloqueados:
+`urgent` y/o `normal`) es un `ConcurrentHashMap.newKeySet()`,
 y los maps de `WarehouseModel` (`robots`, `containers`, `shelves`)
 son `ConcurrentHashMap`.
 
@@ -1199,9 +1244,9 @@ ENV ──> robots:     +at, +shelf, +robot, +container, +picked,
                     +container_destroyed, +container_relocated,
                     +error
 
-scheduler ──> robot_*: tell container_available(CId, W, H, Weight, Type)
+scheduler ──> robot_*: tell container_available(CId, W, H, Weight, Tags)
                        tell container_location(CId, X, Y)
-                       tell exit_item(CId, Loc, W, V, Type, Kind)
+                       tell exit_item(CId, Loc, W, V, Tags, Kind)
                        tell active_deadline(Kind)         (broadcast)
                        untell active_deadline(Kind)        (broadcast)
                        tell exit_taken(CId)                (broadcast)
@@ -1210,29 +1255,29 @@ scheduler ──> robot_*: tell container_available(CId, W, H, Weight, Type)
 
 robot_* ──> scheduler: achieve provide_location(CId, Me)
                        achieve claim_exit(CId, Me)
-                       tell unstorable(CId, Type)
+                       tell unstorable(CId, Tags)
                        tell guardado(CId, Shelf, W, V)         (firma con peso/vol)
                        tell guardado(CId, Shelf)               (firma legacy, solo log)
-                       tell exit_done(CId, Type)
-                       tell force_exit_cycle(Type)
+                       tell exit_done(CId, Tags)
+                       tell force_exit_cycle(Tags)
 
-scheduler ──> supervisor: tell package_arrived(CId, W, V, Type)
-                          tell package_stored(CId, Shelf, W, V, Type)
-                          achieve list_stored(Types, Kind)
-                          tell deadline_started(Kind, Types, Duration)
+scheduler ──> supervisor: tell package_arrived(CId, W, V, Tags)
+                          tell package_stored(CId, Shelf, W, V, Tags)
+                          achieve list_stored(Group, Kind)
+                          tell deadline_started(Kind, Group, Duration)
                           tell exit_cycle_started
                           tell exit_cycle_ended(Group)
 
 supervisor ──> scheduler: tell stored_list_response(Kind, L)
-                          tell no_space(Type)
+                          tell no_space(Group)
                           tell shelf_full(S) / shelf_free(S)
 
 supervisor ──> robot_*:   tell shelf_usage_snapshot(L)
                           (foto autoritativa de shelf_usage; los robots
                            reemplazan su shelf_usage_local con esta L)
 
-scheduler ──> transport:  tell load_start(Kind, Types)
-                          tell container_shipped(CId, Type)
+scheduler ──> transport:  tell load_start(Kind, Group)
+                          tell container_shipped(CId, Tags)
                           tell load_end(Kind, N)
 
 robot_* <──> robot_*:  tell shelf_reserve / shelf_commit /
@@ -1240,7 +1285,7 @@ robot_* <──> robot_*:  tell shelf_reserve / shelf_commit /
                        achieve report_heavy_info(Me)         (heavy↔heavy2)
                        tell heavy_peer_info(L, S)
                        tell help_request(A, MaxW)
-                       tell help_offer(CId, S, W, V, Type)
+                       tell help_offer(CId, S, W, V, Tags)
                        achieve help_take(A, CId)
                        tell help_confirm(...)|help_deny(CId)
 ```
@@ -1252,9 +1297,9 @@ robot_* <──> robot_*:  tell shelf_reserve / shelf_commit /
 ```
 ENV  → scheduler:  +new_container(c_5)
 SCH  → ENV:        get_container_info(c_5)
-ENV  → scheduler:  +container_info(c_5, 1, 2, 25, standard)
-SCH  → supervisor: tell package_arrived(c_5, 25, 2, standard)
-SCH  → robot_*:    tell container_available(c_5, 1, 2, 25, standard)
+ENV  → scheduler:  +container_info(c_5, 1, 2, 25, [standard])
+SCH  → supervisor: tell package_arrived(c_5, 25, 2, [standard])
+SCH  → robot_*:    tell container_available(c_5, 1, 2, 25, [standard])
 ```
 
 Cada robot evalúa `can_i_manage & not faster_capable`:
@@ -1290,38 +1335,38 @@ ROB  → ENV:        step, step, ..., pickup(c_5)
 ROB  → ENV:        step, step, ..., drop_at(shelf_2)
 ROB  → robot_*:    tell shelf_commit(c_5, shelf_2, 25, 2)
 ROB  → scheduler:  tell guardado(c_5, shelf_2, 25, 2)
-SCH  → supervisor: tell package_stored(c_5, shelf_2, 25, 2, standard)
+SCH  → supervisor: tell package_stored(c_5, shelf_2, 25, 2, [standard])
 SUP  → SUP:        +stored_at, recompute_shelf_usage(shelf_2),
-                   check_type_space, broadcast_usage_snapshot
+                   check_group_space, broadcast_usage_snapshot
 SUP  → robot_*:    tell shelf_usage_snapshot([usage(shelf_1,0,0),
                                               usage(shelf_2, 25, 2), ...])
 ```
 
-Si `check_type_space` cruza el 70 %:
+Si `check_group_space` cruza el 70 % en el grupo `normal`:
 ```
-SUP  → scheduler:  tell no_space(standard)
+SUP  → scheduler:  tell no_space(normal)
 ```
 
 #### 5.2.3 Inicio de ciclo de salida
 
-Disparado por `no_space(standard)` (grupo `normal`):
+Disparado por `no_space(normal)`:
 
 ```
 SCH:  +exit_cycle_active, +trigger_group(normal), +blocked_group(normal)
-SCH  → ENV:         block_generation(standard), block_generation(fragile)
+SCH  → ENV:         block_generation(normal)
 SCH  → supervisor:  tell exit_cycle_started
 SCH  → log:         log_event(output_phase_started, normal)
 SCH:  +active_deadline(long), +deadline_shipped_count(long, 0)
 SCH  → log:         log_event(deadline_started, normal)
-SCH  → transport:   tell load_start(long, [standard, fragile])
-SCH  → supervisor:  tell deadline_started(long, [standard, fragile], 90000)
+SCH  → transport:   tell load_start(long, normal)
+SCH  → supervisor:  tell deadline_started(long, normal, 90000)
 SCH  → robot_*:     tell active_deadline(long)               (broadcast)
 
-SCH  → supervisor:  achieve list_stored([standard, fragile], long)
-SUP  → scheduler:   tell stored_list_response(long, [s(c_3, shelf_2, ...), ...])
+SCH  → supervisor:  achieve list_stored(normal, long)
+SUP  → scheduler:   tell stored_list_response(long, [s(c_3, shelf_2, ..., [standard]), ...])
 
 por cada paquete:
-SCH  → robot_*:     tell exit_item(c_3, at_shelf(shelf_2), 25, 2, standard, long)
+SCH  → robot_*:     tell exit_item(c_3, at_shelf(shelf_2), 25, 2, [standard], long)
 
 (unstorable y pending_announce cosechados como at_entry)
 
@@ -1344,9 +1389,9 @@ ROB  → ENV:        step,..., retrieve(c_3)
 ROB  → robot_*:    tell shelf_retrieved(c_3, shelf_2, 25, 2)
 ROB  → ENV:        step,..., drop_at_exit(0, 0)
 ROB  → log:        log_event(container_delivered, c_3)
-ROB  → scheduler:  tell exit_done(c_3, standard)
+ROB  → scheduler:  tell exit_done(c_3, [standard])
 
-SCH  → transport:  tell container_shipped(c_3, standard)
+SCH  → transport:  tell container_shipped(c_3, [standard])
 SCH:               -pending_exit, -claimed
 SCH  → robot_*:    untell exit_taken(c_3)
 ```
@@ -1361,7 +1406,7 @@ SCH  → robot_*:    untell active_deadline(long)
 SCH  → robot_*:    untell exit_item(...)         (limpieza no consumidos)
 
 SCH:               !end_exit_cycle(normal)
-SCH  → ENV:        unblock_generation(standard), unblock_generation(fragile)
+SCH  → ENV:        unblock_generation(normal)
 SCH  → supervisor: tell exit_cycle_ended(normal)
 SCH:               flush pending_announce (publica a robots)
 SCH:               chain_or_release → -exit_cycle_active si la cola está vacía
@@ -1370,8 +1415,8 @@ SCH:               chain_or_release → -exit_cycle_active si la cola está vac�
 #### 5.2.4 Diálogo heavy ↔ heavy2 (reparto simétrico)
 
 ```
-SCH  → heavy:   tell container_available(c_8, 2, 3, 80, standard)
-SCH  → heavy2:  tell container_available(c_8, 2, 3, 80, standard)
+SCH  → heavy:   tell container_available(c_8, 2, 3, 80, [standard])
+SCH  → heavy2:  tell container_available(c_8, 2, 3, 80, [standard])
 
 heavy:  +container_available(c_8,...) [is_router_robot, can_i_manage] →
         !decide_heavy_peer
@@ -1404,7 +1449,7 @@ heavy:  pick_heaviest_servable
           tiene un my_stored servible para él, ofrece a medium, NO
           a light. Sólo si light es el de mayor MaxW servible (o el
           único), heavy le ofrece.
-heavy  → light:                tell help_offer(c_4, shelf_2, 8, 1, standard)
+heavy  → light:                tell help_offer(c_4, shelf_2, 8, 1, [standard])
                               (de su my_stored, que light puede cargar)
 light:  espera 800 ms para juntar ofertas; pick_closest_offer
         (Manhattan a la shelf de cada oferta)
@@ -1412,8 +1457,8 @@ light  → heavy:               achieve help_take(robot_light, c_4)
 
 heavy:  +help_take(...) [my_stored(c_4, shelf_2, 8, 1) & not delegating(c_4)] →
         +delegating(c_4); -my_stored(c_4, shelf_2, 8, 1);
-        ?exit_item(c_4, _, _, _, Type, _);
-heavy  → light:               tell help_confirm(c_4, shelf_2, 8, 1, standard)
+        ?exit_item(c_4, _, _, _, Tags, _);
+heavy  → light:               tell help_confirm(c_4, shelf_2, 8, 1, [standard])
 heavy:  -delegating(c_4)
 
 light:  +help_confirm(...) → +delegated_stored(c_4, shelf_2, 8, 1);
@@ -1475,22 +1520,22 @@ Cae c_12 (50 kg standard). Heavy lo coloca en shelf_9: 50/200 kg,
 SUP:  blocked_group_notified(normal) NO existe → comprueba
       sum_group_usage(normal, 213, 8, 300, 52) → 213/300 = 0.71 ≥ 0.7
       +blocked_group_notified(normal)
-      log_event(no_space_detected, standard)
-SUP  → scheduler:  tell no_space(standard)
+      log_event(no_space_detected, normal)
+SUP  → scheduler:  tell no_space(normal)
 
 SCH:  +exit_cycle_active, +trigger_group(normal)
-      → block_generation(standard), block_generation(fragile)
+      → block_generation(normal)
       → tell exit_cycle_started
       → +active_deadline(long), broadcast tell active_deadline(long)
-      → tell load_start(long, [standard, fragile]) a transport
-      → tell deadline_started(long, [standard, fragile], 90000) a supervisor
-      → achieve list_stored([standard, fragile], long) a supervisor
-SUP  → scheduler:  tell stored_list_response(long, [s(c_3, shelf_2, 25, 2, standard),
-                                                    s(c_4, shelf_3, 30, 2, standard),
-                                                    s(c_7, shelf_3, 18, 1, standard),
-                                                    s(c_9, shelf_6, 50, 4, fragile),
-                                                    s(c_11, shelf_2, 40, 1, standard),
-                                                    s(c_12, shelf_9, 50, 3, standard)])
+      → tell load_start(long, normal) a transport
+      → tell deadline_started(long, normal, 90000) a supervisor
+      → achieve list_stored(normal, long) a supervisor
+SUP  → scheduler:  tell stored_list_response(long, [s(c_3, shelf_2, 25, 2, [standard]),
+                                                    s(c_4, shelf_3, 30, 2, [standard]),
+                                                    s(c_7, shelf_3, 18, 1, [standard]),
+                                                    s(c_9, shelf_6, 50, 4, [fragile]),
+                                                    s(c_11, shelf_2, 40, 1, [standard]),
+                                                    s(c_12, shelf_9, 50, 3, [standard])])
 SCH:  para cada uno → tell exit_item(...) a los 4 robots, +pending_exit
 ```
 
@@ -1525,7 +1570,7 @@ SCH (cuatro intenciones, sin solapes):
   +claimed(c_9) → idem para heavy2
 ```
 
-Cada uno ejecuta `execute_exit(CId, at_shelf(S), Type)`:
+Cada uno ejecuta `execute_exit(CId, at_shelf(S), Tags)`:
 navega a la shelf, comprueba `active_deadline(_)`, `retrieve(CId)`,
 marca `carrying_exit`, va a `go_to_exit_cell` (la celda libre más
 cercana de la zona de salida), `drop_at_exit(EX, EY)`,
@@ -1544,7 +1589,7 @@ puede cargar c_12 (50 kg). Para c_3 (25 kg) tampoco
 
 ```
 light  → broadcast: tell help_request(robot_light, 10)
-heavy  → light:     tell help_offer(c_3, shelf_2, 25, 2, standard)
+heavy  → light:     tell help_offer(c_3, shelf_2, 25, 2, [standard])
                     (no, 25>10 → no) — heavy busca con W <= 10
 medium → light:     tell help_offer(... — algo que medium guardó y pese ≤10)
                     (probablemente nada cumple — medium no acepta ≤10)
@@ -1568,11 +1613,11 @@ Total entregados al cumplirse 90 s: los 6 paquetes.
 ```
 T0+90s:
 SCH:  -active_deadline(long), tell load_end(long, 6) a transport
-SUP.audit_deadline(long, [standard, fragile]):
-   .findall(at_warehouse(CId, Ty, _, _) where Ty in [standard, fragile])
+SUP.audit_deadline(long, normal):
+   .findall(at_warehouse(CId, Tags, _, _) where tags_group(Tags, normal))
    → vacío (todos salieron) → "deadline cumplido (sin pendientes)"
 SCH:  end_exit_cycle(normal)
-   → unblock_generation(standard), unblock_generation(fragile)
+   → unblock_generation(normal)
    → tell exit_cycle_ended(normal) a supervisor
    → flush pending_announce (si hubo paquetes durante el bloqueo)
    → chain_or_release → cola vacía → -exit_cycle_active
@@ -1594,11 +1639,11 @@ ha terminado de mover cuando expira el deadline.
 ```
 T0+90s:
 SCH:  close_deadline(long) → tell load_end(long, 5)   ← solo 5
-SUP.audit_deadline(long, [standard, fragile]):
-   .findall(at_warehouse(c_12, standard, 50, 3))     ← c_12 sigue en almacén
-   "ERROR INFORMATIVO | deadline=long | tipos=[standard, fragile]"
+SUP.audit_deadline(long, normal):
+   .findall(at_warehouse(c_12, [standard], 50, 3))   ← c_12 sigue en almacén
+   "ERROR INFORMATIVO | deadline=long | grupo=normal"
    "Contenedores sin entregar al expirar: 1"
-   "Lista: [p(c_12, standard)]"
+   "Lista: [p(c_12, [standard])]"
    "Total incumplimientos acumulados: 1"
    log_event(deadline_missed, c_12)
    deadline_violations: 0 → 1
@@ -1653,11 +1698,11 @@ de crear en la celda (5,1):
 ```
 ENV (executeSteap → escacharPaquete):
    detecta c_18 en la posición destino, lo destruye
-   addPercept(scheduler, broadcast container_destroyed(c_18, urgent))
+   addPercept(scheduler, broadcast container_destroyed(c_18, [urgent]))
    addError(heavy, "splash_container", ...)
    El step se considera ÉXITO (heavy se mueve, no pierde la intención)
 
-SCH: +container_destroyed(c_18, urgent) →
+SCH: +container_destroyed(c_18, [urgent]) →
    .abolish(package_info(c_18, _, _, _));
    .abolish(pending_announce(c_18, _, _, _, _));
    .abolish(claimed(c_18));
@@ -1668,7 +1713,7 @@ SCH: +container_destroyed(c_18, urgent) →
    .broadcast(untell, container_available(c_18, _, _, _, _));
    .broadcast(untell, exit_taken(c_18));
 
-SUP: +container_destroyed(c_18, urgent) → .abolish(at_warehouse(c_18, _, _, _))
+SUP: +container_destroyed(c_18, [urgent]) → .abolish(at_warehouse(c_18, _, _, _))
 ROB: +container_destroyed(c_18, _) →
    !remove_from_queue(c_18);
    .abolish(...todas las referencias...);
@@ -1687,8 +1732,8 @@ deadline. Va de camino a la salida, pero está a 8 pasos
 ```
 Justo antes de drop_at_exit:
    if (not active_deadline(_)) ← VERDADERO, ya expiró
-   → !reshelf_carried(c_4, standard, shelf_3, 30, 2)
-   → choose_shelf_local(c_4, standard, 30, 2, Chosen)
+   → !reshelf_carried(c_4, [standard], shelf_3, 30, 2)
+   → choose_shelf_local(c_4, [standard], 30, 2, Chosen)
        (las shelves regulares fueron drenadas → todas tienen hueco)
        → Chosen = shelf_2 (la primera que cumpla en su orden)
    → reserve_shelf, navigate_to_shelf(shelf_2), try_reshelf_drop
@@ -1703,7 +1748,7 @@ verá en `stored_at` y lo publicará.
 > shelf que admita el paquete (caso patológico tras un drenaje
 > incompleto), `reshelf_carried_dispatch(_, none)` dispara
 > `force_exit_carried`: lleva el paquete a la salida fuera del
-> deadline y pide al scheduler `force_exit_cycle(Type)`. Es el
+> deadline y pide al scheduler `force_exit_cycle(Tags)`. Es el
 > caso límite, pero el sistema no se queda con paquete huérfano.
 
 ### 6.7 Caso de FRACASO 5 — robot no encuentra shelf desde el principio
@@ -1714,15 +1759,16 @@ gigante en cada (raro pero posible). Light intenta encolar el
 primero:
 
 ```
-medium → ROB(local): choose_shelf_local(c_2, urgent, 5, 1, Chosen)
+medium → ROB(local): choose_shelf_local(c_2, [urgent], 5, 1, Chosen)
    → urgent_shelf ordenadas por distancia, comprobando shelf_fits
    → S1: 50+5 > capacidad ✗
    → S5: 100+5 > capacidad ✗
    → S8: 200+5 > capacidad ✗
    → Chosen = none
-medium → scheduler: tell unstorable(c_2, urgent)
+medium → scheduler: tell unstorable(c_2, [urgent])
 
-SCH: +unstorable(c_2, urgent) → record_unstorable(c_2, urgent)
+SCH: +unstorable(c_2, [urgent]) → record_unstorable(c_2, urgent)
+     (tags_group([urgent], urgent))
    unstorable_pending(urgent, [c_2])  (1 pendiente)
    check_unstorable_threshold(urgent, 1) → < 3 → no acción
 
@@ -1785,6 +1831,39 @@ unstorable. Los robots los procesan en paralelo. Los robots
 ---
 
 ## 7. Decisiones importantes de diseño
+
+### 7.0 Etiquetas (tags) en lugar de "tipo" único
+
+El "tipo" de un paquete es ahora una **lista** de etiquetas Jason
+(`[urgent]`, `[fragile]`, `[urgent, fragile]`, `[standard]`) en
+lugar de un átomo único.
+
+**Por qué**: un paquete puede ser urgente Y frágil al mismo
+tiempo — necesitamos que se trate como urgente (deadline corto,
+shelves S1/S5/S8) Y como frágil (penalización de movimiento del
+15 %) sin duplicar reglas. Las etiquetas son ortogonales:
+- `urgent` → grupo de salida (`tags_group/2`).
+- `fragile` → comportamiento del robot (`carrying_fragile` en
+  `mov.asl`).
+
+**Alternativa descartada**: crear un cuarto tipo
+`urgent_fragile`. Hubiera obligado a duplicar `type_group(urgent_fragile,
+urgent)` y `accepts(urgent_fragile, urgent_shelf)` en cada agente,
+y a definir mapeos ad-hoc para la velocidad. Con etiquetas
+componibles la regla es uniforme:
+`is_urgent_pkg(Tags) :- .member(urgent, Tags).`
+
+**Probabilidades** (configuradas en `WarehouseModel.generateRandomContainerFair`):
+- `[standard]` 0.70 (sin cambios).
+- `[urgent]` 0.13875.
+- `[fragile]` 0.13875.
+- `[urgent, fragile]` 0.0225 (= 0.15 × 0.15).
+
+El bloqueo de generación durante un ciclo se hace por **grupo**
+(`urgent` | `normal`), no por etiqueta individual: el entorno
+expone `block_generation(Group)` y filtra los combos completos
+en el sorteo (tanto el puro como los combos con esa etiqueta
+pasan a probabilidad 0 mientras el grupo esté bloqueado).
 
 ### 7.1 Entorno "tonto", razonamiento en agentes
 
@@ -2093,22 +2172,27 @@ hitos relevantes para auditoría posterior:
 ## 10. Apéndice — diccionario rápido de creencias clave
 
 ### Scheduler
-- `package_info(CId, W, V, Type)` — caché por contenedor.
+- `package_info(CId, W, V, Tags)` — caché por contenedor.
 - `unstorable_pending(Group, [CIds])` — pendientes por grupo.
-- `pending_announce(CId, W, H, Wt, Ty)` — caídos durante bloqueo.
-- `pending_exit(CId, Loc, W, V, Type, Kind)` — exit_item activo.
+- `pending_announce(CId, W, H, Wt, Tags)` — caídos durante bloqueo.
+- `pending_exit(CId, Loc, W, V, Tags, Kind)` — exit_item activo.
 - `claimed(CId)` — alguien ya reclamó.
 - `exit_cycle_active`, `trigger_group(G)`, `blocked_group(G)`.
 - `active_deadline(short|long)`, `deadline_shipped_count(K, N)`.
 - `pending_queue([Groups])` — FIFO de triggers durante un ciclo.
+- Regla derivada `tags_group(Tags, urgent|normal)`.
 
 ### Supervisor
 - `shelf_usage(S, W, V)` — derivada de `stored_at` por
   `recompute_shelf_usage`. NO se mantiene con +/- por evento.
 - `shelf_capacity(S, MaxW, MaxV)`.
-- `stored_at(CId, S, Type, W, V)` — quién almacena qué (única
+- `stored_at(CId, S, Tags, W, V)` — quién almacena qué (única
   fuente de verdad del supervisor).
-- `at_warehouse(CId, Type, W, V)` — ha entrado, no ha salido.
+- `at_warehouse(CId, Tags, W, V)` — ha entrado, no ha salido.
+- `urgent_shelf(S)` / `regular_shelf(S)` y la regla derivada
+  `shelf_admits(Tags, S)` (presencia/ausencia de `urgent`).
+- `shelf_in_group(urgent|normal, S)` — qué shelves componen
+  cada grupo, para `sum_group_usage`.
 - `blocked_group_notified(G)` — ya avisé a scheduler.
 - `snapshot_period_ms(P)` — periodo del broadcast autoritativo de
   `shelf_usage_snapshot` a los robots (15000 ms).
@@ -2116,7 +2200,9 @@ hitos relevantes para auditoría posterior:
 
 ### Robot
 - `state(idle|going_idle|busy)`.
-- `container_queue([pkg(...)])`.
+- `container_queue([pkg(CId, Weight, W, H, Tags)])`.
+- Reglas derivadas: `is_urgent_pkg(Tags)`, `is_fragile_pkg(Tags)`,
+  `accepts(Tags, Shelf)`.
 - `shelf_usage_local(S, W, V)` — depósitos confirmados; se
   reescribe íntegro al recibir `shelf_usage_snapshot` del
   supervisor.
@@ -2125,9 +2211,11 @@ hitos relevantes para auditoría posterior:
 - `pending_drop(CId, S, W, V)` — en vuelo entre reserve y commit.
 - `my_stored(CId, S, W, V)` — paquetes míos en estanterías.
 - `delegated_stored(CId, S, W, V)` — recibidos por help_take.
-- `exit_item(CId, Loc, W, V, Type, Kind)`, `pending_claim(CId, Loc, Type)`.
-- `exit_in_progress(CId)`, `carrying_exit(CId, Type, S, W, V)`.
-- `carrying_fragile`, `prev_pos`, `visited(X,Y)`, `block_streak(N)`.
+- `exit_item(CId, Loc, W, V, Tags, Kind)`, `pending_claim(CId, Loc, Tags)`.
+- `exit_in_progress(CId)`, `carrying_exit(CId, Tags, S, W, V)`.
+- `carrying_fragile` (activo cuando llevamos un paquete con la
+  etiqueta `fragile`, sea fragile puro o el combo `urgent+fragile`).
+- `prev_pos`, `visited(X,Y)`, `block_streak(N)`.
 
 ---
 

@@ -100,11 +100,11 @@ public class WarehouseArtifact extends Environment {
 
                     Container container = model.newContainer(blockedGenerationTypes);
                     if (container == null) {
-                        // Si es por bloqueo total, no es un error — solo saltamos.
-                        if (blockedGenerationTypes.contains("standard")
-                                && blockedGenerationTypes.contains("fragile")
-                                && blockedGenerationTypes.contains("urgent")) {
-                            System.out.println("Generador pausado: todos los tipos bloqueados");
+                        // Si es por bloqueo total (los dos grupos de salida bloqueados),
+                        // no es un error — solo saltamos.
+                        if (blockedGenerationTypes.contains("urgent")
+                                && blockedGenerationTypes.contains("normal")) {
+                            System.out.println("Generador pausado: ambos grupos bloqueados");
                         } else {
                             addError("supervisor", "container_generation_failed", "Failed to generate new container");
                         }
@@ -113,7 +113,7 @@ public class WarehouseArtifact extends Environment {
 
                     if (view != null) {
                         view.logMessage(String.format("New container: %s (%.1fkg, %s)",
-                                container.getId(), container.getWeight(), container.getType()));
+                                container.getId(), container.getWeight(), container.getTags()));
                         view.update();
                     }
 
@@ -335,14 +335,14 @@ public class WarehouseArtifact extends Environment {
      */
     private void broadcastContainerDestroyed(Container c) {
         String cid = c.getId();
-        String type = c.getType();
+        String tagsList = c.getTagsAsAslList();
 
         // Percepciones que el env mantenía sobre el contenedor
         removePerceptsByUnif("scheduler",
                 Literal.parseLiteral("container_at(" + cid + ",_,_)"));
         updateOccupancy(c.getX(), c.getY(), false);
 
-        Literal lit = Literal.parseLiteral("container_destroyed(" + cid + "," + type + ")");
+        Literal lit = Literal.parseLiteral("container_destroyed(" + cid + "," + tagsList + ")");
         addPercept(lit);
 
     }
@@ -458,7 +458,7 @@ public class WarehouseArtifact extends Environment {
         Robot robot = model.getRobots().get(agName);
         Container carried = robot != null ? robot.getCarriedContainer() : null;
         String cid = carried != null ? carried.getId() : "?";
-        String type = carried != null ? carried.getType() : "?";
+        String tagsList = carried != null ? carried.getTagsAsAslList() : "[]";
         double weight = carried != null ? carried.getWeight() : 0.0;
         int volume = carried != null ? carried.getArea() : 0;
 
@@ -468,9 +468,9 @@ public class WarehouseArtifact extends Environment {
             viewAct(String.format("%s dropped %s at exit", agName, cid));
             removePerceptsByUnif(agName, Literal.parseLiteral("picked(_)"));
             addPercept("scheduler", Literal.parseLiteral(
-                    "container_exited(" + cid + "," + type + "," + weight + "," + volume + ")"));
+                    "container_exited(" + cid + "," + tagsList + "," + weight + "," + volume + ")"));
             addPercept("supervisor", Literal.parseLiteral(
-                    "container_exited(" + cid + "," + type + "," + weight + "," + volume + ")"));
+                    "container_exited(" + cid + "," + tagsList + "," + weight + "," + volume + ")"));
             return true;
         } else if (error == 1) {
             addError(agName, "invalid_exit", "Robot not found");

@@ -159,28 +159,28 @@ public class WarehouseModel extends GridWorldModel {
     }
 
     /**
-     * Genera un nuevo contenedor evitando los tipos indicados en blockedTypes
-     * (ciclo de salida activo). Si los tres tipos están bloqueados devuelve
-     * null sin consumir slot.
+     * Genera un nuevo contenedor evitando los GRUPOS de salida indicados en
+     * blockedGroups. Los grupos son:
+     *   - "urgent": paquetes con la etiqueta urgent (puro o combinado con fragile)
+     *   - "normal": paquetes sin la etiqueta urgent (standard puro o fragile puro)
+     * Si los dos grupos están bloqueados devuelve null sin consumir slot.
      */
-    public Container newContainer(Set<String> blockedTypes) {
+    public Container newContainer(Set<String> blockedGroups) {
         if (freeEntranceSlots.isEmpty()) {
             System.out.println("No free entrance slots available!");
             totalErrors.incrementAndGet();
             return null;
         }
-        if (blockedTypes.contains("standard")
-                && blockedTypes.contains("fragile")
-                && blockedTypes.contains("urgent")) {
-            // Todos los tipos bloqueados — no se genera nada.
+        if (blockedGroups.contains("urgent") && blockedGroups.contains("normal")) {
+            // Ambos grupos bloqueados — no se genera nada.
             return null;
         }
 
-        Container container = generateRandomContainerFair(blockedTypes);
+        Container container = generateRandomContainerFair(blockedGroups);
         if (container == null) {
             return null;
         }
-        
+
         containers.put(container.getId(), container);
         PendingContainerCounter.incrementAndGet();
         totalContainers++;
@@ -192,7 +192,7 @@ public class WarehouseModel extends GridWorldModel {
         return generateRandomContainerFair(java.util.Collections.emptySet());
     }
 
-    private Container generateRandomContainerFair(Set<String> blockedTypes) {
+    private Container generateRandomContainerFair(Set<String> blockedGroups) {
         // Consume un slot libre del pool
         Location slot = freeEntranceSlots.poll();
         if (slot == null) {
@@ -225,38 +225,60 @@ public class WarehouseModel extends GridWorldModel {
             weight = 30 + rand.nextDouble() * 70;
         }
 
-        // Sorteo ponderado estándar 0.70 / fragile 0.15 / urgent 0.15,
-        // descartando tipos bloqueados y renormalizando pesos.
-        Map<String, Double> weights = new LinkedHashMap<>();
-        if (!blockedTypes.contains("standard")) weights.put("standard", 0.70);
-        if (!blockedTypes.contains("fragile"))  weights.put("fragile",  0.15);
-        if (!blockedTypes.contains("urgent"))   weights.put("urgent",   0.15);
+        // ───────────────────────────────────────────────────────
+        // SORTEO DE ETIQUETAS (no son tipos disjuntos: son tags que
+        // pueden combinarse). Probabilidades:
+        //   [standard]         0.70    (sin atributos especiales)
+        //   [urgent]           0.13875 (urgente puro)
+        //   [fragile]          0.13875 (frágil puro)
+        //   [urgent, fragile]  0.0225 (= 0.15 * 0.15) — el combo
+        //
+        // Se conserva la probabilidad de "standard" (0.70) tal como pidió
+        // el usuario; el combo urgent+fragile sale 0.0225, y el resto
+        // (0.30 - 0.0225 = 0.2775) se reparte por igual entre urgent puro
+        // y fragile puro (0.13875 cada uno). Suma = 1.0.
+        //
+        // Bloqueos por grupo (ciclo de salida activo):
+        //   - "urgent"  bloqueado  ⇒  no se generan combos con urgent
+        //   - "normal"  bloqueado  ⇒  no se generan combos sin urgent
+        //                              (standard puro ni fragile puro)
+        // Renormalizamos pesos descartando combos bloqueados.
+        // ───────────────────────────────────────────────────────
+        boolean blockUrgent = blockedGroups.contains("urgent");
+        boolean blockNormal = blockedGroups.contains("normal");
+
+        Map<List<String>, Double> tagWeights = new LinkedHashMap<>();
+        if (!blockNormal) tagWeights.put(Arrays.asList("standard"),         0.70);
+        if (!blockUrgent) tagWeights.put(Arrays.asList("urgent"),           0.13875);
+        if (!blockNormal) tagWeights.put(Arrays.asList("fragile"),          0.13875);
+        if (!blockUrgent) tagWeights.put(Arrays.asList("urgent", "fragile"), 0.0225);
+
         double totalW = 0.0;
-        for (Double w : weights.values()) totalW += w;
+        for (Double w : tagWeights.values()) totalW += w;
 
         double r = rand.nextDouble() * totalW;
         double acc = 0.0;
-        String type = null;
-        for (Map.Entry<String, Double> e : weights.entrySet()) {
+        List<String> chosenTags = null;
+        for (Map.Entry<List<String>, Double> e : tagWeights.entrySet()) {
             acc += e.getValue();
             if (r <= acc) {
-                type = e.getKey();
+                chosenTags = e.getKey();
                 break;
             }
         }
-        if (type == null) {
-            // No debería ocurrir si blockedTypes no contiene los tres tipos.
+        if (chosenTags == null) {
+            // No debería ocurrir si no están todos los grupos bloqueados.
             freeEntranceSlots.offer(slot);
             return null;
         }
 
-        if(hayAgenteEn(slot.getX(), slot.getY())) {
+        if (hayAgenteEn(slot.getX(), slot.getY())) {
             freeEntranceSlots.offer(slot);
             return null;
         }
 
         grid[slot.getX()][slot.getY()] = CellType.PACKAGE;
-        Container container = new Container(id, width, height, weight, type);
+        Container container = new Container(id, width, height, weight, chosenTags);
         container.setPosition(slot.getX(), slot.getY());
         return container;
     }
@@ -589,12 +611,14 @@ public class WarehouseModel extends GridWorldModel {
                 return null;
             }
 
+            // El "tipo" se serializa como lista de etiquetas Jason:
+            //   container_info(c1, 1, 1, 5.0, [urgent,fragile])
             return Literal.parseLiteral(
                     "container_info(" + containerId + ","
                     + container.getWidth() + ","
                     + container.getHeight() + ","
                     + container.getWeight() + ","
-                    + container.getType() + ")"
+                    + container.getTagsAsAslList() + ")"
             );
 
         } catch (Exception e) {

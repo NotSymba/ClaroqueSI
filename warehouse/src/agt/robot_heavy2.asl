@@ -60,17 +60,17 @@ faster_capable(W, H, Weight) :-
 // Si el peer no responde en 2s (caso degenerado) nos lo quedamos para
 // no perder el paquete.
 // ═════════════════════════════════════════════════════════════
-+container_available(CId, W, H, Weight, Type) :
++container_available(CId, W, H, Weight, Tags) :
         is_router_robot &
         can_i_manage(W, H, Weight) &
         not faster_capable(W, H, Weight) <-
-    !decide_heavy_peer(CId, W, H, Weight, Type);
+    !decide_heavy_peer(CId, W, H, Weight, Tags);
     .abolish(container_available(CId, _, _, _, _)).
 
 +container_available(CId, _, _, _, _) : is_router_robot <-
     .abolish(container_available(CId, _, _, _, _)).
 
-+!decide_heavy_peer(CId, W, H, Weight, Type) :
++!decide_heavy_peer(CId, W, H, Weight, Tags) :
         container_queue(MyQ) & state(MyS) <-
     .length(MyQ, MyL);
     !heavy_peer_name(PeerName);
@@ -82,10 +82,10 @@ faster_capable(W, H, Weight) :-
     if (heavy_peer_info(PeerL, PeerS)) {
         .abolish(heavy_peer_info(_, _));
         .print("Peer ", PeerName, ": cola=", PeerL, ", estado=", PeerS);
-        !route_symmetric(CId, W, H, Weight, Type, MyL, MyS, PeerL, PeerS)
+        !route_symmetric(CId, W, H, Weight, Tags, MyL, MyS, PeerL, PeerS)
     } else {
         .print("Peer ", PeerName, " no responde — me quedo ", CId);
-        !enqueue(CId, W, H, Weight, Type)
+        !enqueue(CId, W, H, Weight, Tags)
     }.
 
 +!heavy_peer_name(robot_heavy2) : .my_name(robot_heavy).
@@ -101,20 +101,20 @@ faster_capable(W, H, Weight) :-
 // enqueue, el otro cae en un plan "me toca descartar".
 //
 // (1) Cola más corta gana
-+!route_symmetric(CId, W, H, Weight, Type, MyL, _, PeerL, _) :
++!route_symmetric(CId, W, H, Weight, Tags, MyL, _, PeerL, _) :
         MyL < PeerL <-
     .print("  Mi cola menor (", MyL, " < ", PeerL, ") → me quedo ", CId);
-    !enqueue(CId, W, H, Weight, Type).
+    !enqueue(CId, W, H, Weight, Tags).
 
 +!route_symmetric(CId, _, _, _, _, MyL, _, PeerL, _) :
         MyL > PeerL <-
     .print("  Peer cola menor (", PeerL, " < ", MyL, ") — descarto ", CId).
 
 // (2) Empate de cola — el no-ocupado gana sobre el ocupado
-+!route_symmetric(CId, W, H, Weight, Type, L, MyS, L, busy) :
++!route_symmetric(CId, W, H, Weight, Tags, L, MyS, L, busy) :
         MyS \== busy <-
     .print("  Empate cola, peer ocupado y yo no → me quedo ", CId);
-    !enqueue(CId, W, H, Weight, Type).
+    !enqueue(CId, W, H, Weight, Tags).
 
 +!route_symmetric(CId, _, _, _, _, L, busy, L, PeerS) :
         PeerS \== busy <-
@@ -122,18 +122,18 @@ faster_capable(W, H, Weight) :-
 
 // (3) Empate de cola y ambos no-ocupados — idle (en zona) gana sobre
 //     going_idle (yendo a zona)
-+!route_symmetric(CId, W, H, Weight, Type, L, idle, L, going_idle) <-
++!route_symmetric(CId, W, H, Weight, Tags, L, idle, L, going_idle) <-
     .print("  Empate cola, yo en zona idle vs peer going_idle → me quedo ", CId);
-    !enqueue(CId, W, H, Weight, Type).
+    !enqueue(CId, W, H, Weight, Tags).
 
 +!route_symmetric(CId, _, _, _, _, L, going_idle, L, idle) <-
     .print("  Empate cola, peer en zona idle vs yo going_idle — descarto ", CId).
 
 // (4) Empate absoluto (misma cola y mismo estado) — robot_heavy gana
-+!route_symmetric(CId, W, H, Weight, Type, L, S, L, S) :
++!route_symmetric(CId, W, H, Weight, Tags, L, S, L, S) :
         .my_name(robot_heavy) <-
     .print("  Empate absoluto — robot_heavy gana → me quedo ", CId);
-    !enqueue(CId, W, H, Weight, Type).
+    !enqueue(CId, W, H, Weight, Tags).
 
 +!route_symmetric(CId, _, _, _, _, _, _, _, _) <-
     .print("  Empate absoluto — robot_heavy se queda con ", CId, ", yo descarto").

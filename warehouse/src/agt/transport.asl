@@ -5,8 +5,10 @@
  * de cada deadline de salida. No interactúa con el entorno: sólo recibe los
  * avisos del scheduler para registrar qué se está transportando.
  *
- *   load_start(DeadlineKind, TypeList)   → preparando el transporte
- *   container_shipped(CId, Type)         → contenedor cargado en el camión
+ *   load_start(DeadlineKind, Group)      → preparando el transporte (urgent|normal)
+ *   container_shipped(CId, Tags)         → contenedor cargado (Tags es la lista
+ *                                          de etiquetas: [urgent], [fragile],
+ *                                          [urgent,fragile], [standard]...)
  *   load_end(DeadlineKind, Count)        → el camión se va con N contenedores
  ******************************************************************************/
 total_salidas(0).
@@ -15,13 +17,13 @@ total_salidas(0).
 +!start <-
     .print("Transport online — listo para recoger contenedores en los deadlines de salida.").
 
-+load_start(Kind, Types)[source(scheduler)] <-
-    .print("Transport: preparando carga '", Kind, "' para tipos ", Types);
-    .abolish(load_start(Kind, Types)[source(scheduler)]).
++load_start(Kind, Group)[source(scheduler)] <-
+    .print("Transport: preparando carga '", Kind, "' para grupo ", Group);
+    .abolish(load_start(Kind, Group)[source(scheduler)]).
 
-+container_shipped(CId, Type)[source(scheduler)] <-
-    .print("Transport: cargado ", CId, " (", Type, ")");
-    .abolish(container_shipped(CId, Type)[source(scheduler)]).
++container_shipped(CId, Tags)[source(scheduler)] <-
+    .print("Transport: cargado ", CId, " (tags=", Tags, ")");
+    .abolish(container_shipped(CId, Tags)[source(scheduler)]).
 
 +load_end(Kind, N)[source(scheduler)] : total_salidas(T)<-
     .print("Transport: sale el camión de '", Kind, "' con ", N, " contenedores");

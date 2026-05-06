@@ -338,16 +338,20 @@ public class WarehouseView extends JFrame {
                 int px = container.getX() * CELL_SIZE;
                 int py = container.getY() * CELL_SIZE;
 
+                // Color según etiquetas: el combo urgent+fragile (paquete
+                // "delicado y prioritario") se distingue con un magenta intenso
+                // para que se vea de un vistazo en la GUI.
                 Color containerColor;
-                switch (container.getType()) {
-                    case "fragile":
-                        containerColor = new Color(255, 200, 200);
-                        break;
-                    case "urgent":
-                        containerColor = new Color(255, 150, 0);
-                        break;
-                    default:
-                        containerColor = new Color(150, 150, 255);
+                boolean isUrgent  = container.hasTag("urgent");
+                boolean isFragile = container.hasTag("fragile");
+                if (isUrgent && isFragile) {
+                    containerColor = new Color(180, 0, 180);   // magenta — combo
+                } else if (isUrgent) {
+                    containerColor = new Color(255, 150, 0);   // naranja — urgente
+                } else if (isFragile) {
+                    containerColor = new Color(255, 200, 200); // rosa claro — frágil
+                } else {
+                    containerColor = new Color(150, 150, 255); // azul — standard
                 }
 
                 g.setColor(containerColor);
