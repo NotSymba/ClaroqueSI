@@ -180,7 +180,7 @@ public class WarehouseModel extends GridWorldModel {
         if (container == null) {
             return null;
         }
-
+        
         containers.put(container.getId(), container);
         PendingContainerCounter.incrementAndGet();
         totalContainers++;
@@ -250,8 +250,12 @@ public class WarehouseModel extends GridWorldModel {
             return null;
         }
 
-        grid[slot.getX()][slot.getY()] = CellType.PACKAGE;
+        if(hayAgenteEn(slot.getX(), slot.getY())) {
+            freeEntranceSlots.offer(slot);
+            return null;
+        }
 
+        grid[slot.getX()][slot.getY()] = CellType.PACKAGE;
         Container container = new Container(id, width, height, weight, type);
         container.setPosition(slot.getX(), slot.getY());
         return container;
