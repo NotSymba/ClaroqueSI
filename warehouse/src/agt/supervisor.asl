@@ -32,9 +32,16 @@ errors_by_type(illegal_move, 0).
 errors_by_type(conflict, 0).
 errors_by_type(route_blocked, 0).
 
+/* T0 se fija al arrancar !start consultando el reloj del entorno
+ * (acción get_time → percept current_time/1). Mientras tanto sirve
+ * como placeholder. */
 system_start_time(0).
 max_errors_per_minute(10).
 max_consecutive_errors(999).
+
+/* Periodicidad del audit temporal de deadlines. Cada P ms el supervisor
+ * consulta el reloj y comprueba si alguna deadline_window/4 ha expirado. */
+deadline_audit_period_ms(2000).
 
 total_received(0).
 total_stored(0).
@@ -100,7 +107,13 @@ snapshot_period_ms(15000).
 
 +!start : true <-
     .print("Supervisor iniciado y monitorizando el almacén...");
-    !!periodic_snapshot.
+    get_time;
+    ?current_time(T0);
+    .abolish(system_start_time(_));
+    +system_start_time(T0);
+    .print("Supervisor: T0 fijado a ", T0, " ms (epoch del sistema)");
+    !!periodic_snapshot;
+    !!periodic_deadline_audit.
 
 +!periodic_snapshot : snapshot_period_ms(P) <-
     .wait(P);
@@ -254,6 +267,7 @@ snapshot_period_ms(15000).
 /* Fin del proceso de salida de un GRUPO. */
 +exit_cycle_done(Group)[source(scheduler)] <-
     -blocked_group_notified(Group);
+    !purge_windows_of(Group);
     .print("Supervisor: ciclo de salida del grupo ", Group, " completado");
     -exit_cycle_done(Group)[source(scheduler)].
 
@@ -359,39 +373,77 @@ snapshot_period_ms(15000).
  * VIGILANCIA TEMPORAL DE DEADLINES
  *
  *   El scheduler avisa con tell deadline_started(Kind, Group, Duration) cuando
- *   arranca un deadline. Tras Duration ms auditamos qué contenedores del grupo
- *   siguen en el almacén (at_warehouse/4).
+ *   arranca un deadline. El supervisor:
+ *
+ *     1. Lee el reloj del entorno (get_time → current_time/1) y registra una
+ *        deadline_window(Kind, Group, Tstart, Tend), Tend = Tstart+Duration.
+ *     2. Un plan independiente !periodic_deadline_audit corre en bucle cada
+ *        deadline_audit_period_ms ms. En cada tick consulta el reloj y, para
+ *        cada ventana cuyo Tnow >= Tend que aún no haya sido auditada, emite
+ *        un log_event(deadline_missed, CId) por cada contenedor del grupo
+ *        que siga en at_warehouse/4 (i.e. no depositado en zona de salida).
+ *     3. El criterio "tiempo actual > deadline" se evalúa explícitamente con
+ *        Tnow >= Tend, no implícitamente con .wait. Esto cumple el requisito
+ *        de detección periódica durante el ciclo en vez de un único disparo
+ *        al final.
+ *
+ *   La auditoría no envía mensajes a robots, no toca el entorno ni cancela
+ *   tareas: solo lee at_warehouse y llama log_event.
  * ============================================================================ */
 
 +deadline_started(Kind, Group, Duration)[source(scheduler)] <-
     -deadline_started(Kind, Group, Duration)[source(scheduler)];
-    .print("Supervisor: arranco vigilancia temporal de deadline ", Kind,
-           " (grupo=", Group, ", duración=", Duration, "ms)");
-    !watch_deadline(Kind, Group, Duration).
+    get_time;
+    ?current_time(Tstart);
+    Tend = Tstart + Duration;
+    +deadline_window(Kind, Group, Tstart, Tend);
+    .print("Supervisor: vigilancia de deadline ", Kind,
+           " (grupo=", Group, ") | Tstart=", Tstart,
+           " Tend=", Tend, " duración=", Duration, "ms").
 
-+!watch_deadline(Kind, Group, Duration) <-
-    .wait(Duration);
-    !audit_deadline(Kind, Group).
+/* Bucle periódico de audit. Lanzado desde !start. */
++!periodic_deadline_audit : deadline_audit_period_ms(P) <-
+    .wait(P);
+    !run_deadline_audit;
+    !!periodic_deadline_audit.
 
-+!audit_deadline(Kind, Group) <-
++!run_deadline_audit : not deadline_window(_, _, _, _) <- true.
+
++!run_deadline_audit <-
+    get_time;
+    ?current_time(Tnow);
+    .findall(w(K, G, Ts, Te),
+             (deadline_window(K, G, Ts, Te) & not deadline_window_audited(K, G, Ts)),
+             Ws);
+    !audit_windows(Ws, Tnow).
+
++!audit_windows([], _).
++!audit_windows([w(K, G, Ts, Te) | Rest], Tnow) : Tnow >= Te <-
+    +deadline_window_audited(K, G, Ts);
+    !audit_deadline_expired(K, G, Ts, Te, Tnow);
+    !audit_windows(Rest, Tnow).
++!audit_windows([_ | Rest], Tnow) <-
+    !audit_windows(Rest, Tnow).
+
++!audit_deadline_expired(Kind, Group, Tstart, Tend, Tnow) <-
     .findall(p(CId, Tags),
              (at_warehouse(CId, Tags, _, _) & tags_group(Tags, Group)),
              Pending);
     .length(Pending, N);
-    !report_audit(Kind, Group, N, Pending).
+    !report_audit(Kind, Group, Tstart, Tend, Tnow, N, Pending).
 
-+!report_audit(Kind, _, 0, _) <-
-    .print("Supervisor: deadline ", Kind, " cumplido (sin pendientes)").
++!report_audit(Kind, Group, _, Tend, Tnow, 0, _) <-
+    .print("Supervisor: deadline ", Kind, " grupo=", Group,
+           " cumplido (Tnow=", Tnow, " >= Tend=", Tend, ", sin pendientes)").
 
-+!report_audit(Kind, Group, N, Pending) :
++!report_audit(Kind, Group, Tstart, Tend, Tnow, N, Pending) :
         deadline_violations(K) <-
-    .abolish(deadline_violations(_));
-    +deadline_violations(K + 1);
+    -+deadline_violations(K + N);
     .print("==========================================================");
-    .print("ERROR INFORMATIVO | deadline=", Kind, " | grupo=", Group);
-    .print("  Contenedores sin entregar al expirar: ", N);
-    .print("  Lista: ", Pending);
-    .print("  Total incumplimientos acumulados: ", K + 1);
+    .print("DEADLINE INCUMPLIDO | kind=", Kind, " grupo=", Group);
+    .print("  Tstart=", Tstart, " Tend=", Tend, " Tnow=", Tnow);
+    .print("  Contenedores sin entregar: ", N, " | Lista: ", Pending);
+    .print("  Total incumplimientos acumulados: ", K + N);
     !emit_deadline_missed_each(Pending);
     .print("==========================================================").
 
@@ -399,3 +451,9 @@ snapshot_period_ms(15000).
 +!emit_deadline_missed_each([p(CId, _) | Rest]) <-
     log_event(deadline_missed, CId);
     !emit_deadline_missed_each(Rest).
+
+/* Limpieza: cuando el scheduler cierra el ciclo del grupo, retiramos las
+ * ventanas y marcas auditadas correspondientes para que no queden residuos. */
++!purge_windows_of(Group) <-
+    .abolish(deadline_window(_, Group, _, _));
+    .abolish(deadline_window_audited(_, Group, _)).

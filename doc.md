@@ -444,12 +444,25 @@ saturación** agregada para avisar al scheduler.
    peso/volumen de las shelves del grupo (`urgent_shelf` o
    `regular_shelf`) supera 70 %, con bloqueo
    `blocked_group_notified(Group)` para no spamear.
-5. **Vigilancia temporal de deadlines**: arrancar un timer cuando
-   el scheduler le envía `deadline_started(Kind, Group, Duration)`
-   y, al expirar, auditar qué `at_warehouse(CId, Tags, _, _)` con
-   `tags_group(Tags, Group)` sigue en el almacén — cada pendiente
-   cuenta como incumplimiento informativo (`deadline_violations` ++)
-   y emite `log_event(deadline_missed, CId)`.
+5. **Vigilancia temporal de deadlines** (detección periódica con
+   reloj real, no `.wait` único):
+   - Al arrancar (`!start`), el supervisor consulta el reloj del
+     entorno con `get_time` → `?current_time(T0)` y fija
+     `system_start_time(T0)` (T0 inicial real, en ms desde epoch).
+   - Cuando el scheduler le envía `deadline_started(Kind, Group,
+     Duration)`, lee `Tstart` con `get_time` y registra una
+     creencia `deadline_window(Kind, Group, Tstart, Tstart+Duration)`.
+   - Un plan `!periodic_deadline_audit` corre en bucle (cada
+     `deadline_audit_period_ms` = 2000 ms): consulta el reloj y, para
+     cada `deadline_window` cuyo `Tnow >= Tend` que aún no haya sido
+     auditada, audita `at_warehouse(CId, Tags, _, _)` con
+     `tags_group(Tags, Group)`. Cada pendiente cuenta como
+     incumplimiento informativo (`deadline_violations` ++) y emite
+     `log_event(deadline_missed, CId)`.
+   - El criterio "tiempo actual > deadline" se evalúa **explícitamente**
+     comparando reloj contra `Tend`, no implícitamente con `.wait`.
+   - La auditoría no envía mensajes a robots ni toca el entorno: solo
+     lee `at_warehouse` y emite el `log_event`.
 6. **`list_stored(Group, Kind)`**: contestar al scheduler con la
    lista de `s(CId, Shelf, W, V, Tags)` de los `stored_at` cuyo
    grupo coincida con el solicitado.
@@ -555,26 +568,62 @@ depósitos confirmados. Los robots reciben el snapshot y reemplazan
 su `shelf_usage_local`; las reservas locales (`shelf_reservation`)
 no se tocan: son creencias propias sobre operaciones en vuelo.
 
-##### Vigilancia temporal del deadline
+##### Vigilancia temporal del deadline (detección periódica con reloj real)
+
+El entorno expone una acción `get_time` (en `WarehouseArtifact`) que
+publica el percept `current_time(Millis)` con
+`System.currentTimeMillis()` para el agente llamante. El supervisor la
+usa para fijar T0 al arrancar y para evaluar expiraciones de deadline.
 
 ```jason
+deadline_audit_period_ms(2000).
+
++!start <-
+    get_time;
+    ?current_time(T0);
+    -+system_start_time(T0);
+    !!periodic_snapshot;
+    !!periodic_deadline_audit.
+
 +deadline_started(Kind, Group, Duration)[source(scheduler)] <-
-    !watch_deadline(Kind, Group, Duration).
+    get_time;
+    ?current_time(Tstart);
+    Tend = Tstart + Duration;
+    +deadline_window(Kind, Group, Tstart, Tend).
 
-+!watch_deadline(Kind, Group, Duration) <-
-    .wait(Duration);
-    !audit_deadline(Kind, Group).
++!periodic_deadline_audit : deadline_audit_period_ms(P) <-
+    .wait(P);
+    !run_deadline_audit;
+    !!periodic_deadline_audit.
 
-+!audit_deadline(Kind, Group) <-
-    .findall(p(CId, Tags),
-             (at_warehouse(CId, Tags, _, _) & tags_group(Tags, Group)),
-             Pending);
-    .length(Pending, N);
-    !report_audit(Kind, Group, N, Pending).
++!run_deadline_audit <-
+    get_time;
+    ?current_time(Tnow);
+    .findall(w(K, G, Ts, Te),
+             (deadline_window(K, G, Ts, Te) &
+              not deadline_window_audited(K, G, Ts)),
+             Ws);
+    !audit_windows(Ws, Tnow).
+
++!audit_windows([w(K, G, Ts, Te) | Rest], Tnow) : Tnow >= Te <-
+    +deadline_window_audited(K, G, Ts);
+    !audit_deadline_expired(K, G, Ts, Te, Tnow);
+    !audit_windows(Rest, Tnow).
 ```
 
-`report_audit` con `N > 0` incrementa `deadline_violations` y
-emite `log_event(deadline_missed, CId)` por cada pendiente.
+`audit_deadline_expired` busca los `at_warehouse(CId, Tags, _, _)`
+cuyo `tags_group(Tags, Group)` coincide y, por cada uno, emite
+`log_event(deadline_missed, CId)`. Las ventanas se purgan en
+`+exit_cycle_done(Group)` con `!purge_windows_of(Group)`.
+
+Diferencias clave frente a la versión anterior basada en `.wait`:
+- T0 es ahora el **epoch real** (ms del sistema), no un placeholder.
+- La detección **es periódica** (cada 2 s) durante todo el ciclo: una
+  vez `Tnow >= Tend` la ventana se audita exactamente una vez.
+- El criterio "tiempo actual > deadline" se chequea **explícitamente**
+  contra el reloj, no implícitamente terminando un `.wait(Duration)`.
+- La auditoría no toca robots ni entorno: solo lee `at_warehouse` y
+  emite `log_event`.
 
 ##### Reset al cerrar el ciclo
 
@@ -1101,6 +1150,7 @@ error añaden un percept `error(Type, Data)` al agente.
 | `block_generation(Group)`   | Scheduler   | Pausa generación de un grupo (`urgent` \| `normal`) |
 | `unblock_generation(Group)` | Scheduler   | Reanuda                                             |
 | `log_event(Type, Data)`     | Cualquiera  | Emite línea EVENT en consola y `eventlog.txt`       |
+| `get_time`                  | Supervisor  | Devuelve `current_time(Millis)` con `System.currentTimeMillis()` |
 
 ### 3.2 Eventos / percepts del entorno hacia agentes
 
@@ -1119,6 +1169,7 @@ error añaden un percept `error(Type, Data)` al agente.
 | `container_relocated(CId, X, Y)`         | Robots             | Tras `relocate_container`         |
 | `container_info(CId, W, H, Weight, Tags)`| Quien preguntó    | Tras `get_container_info`         |
 | `shelf_adjacent(SId, [pos(X,Y),...])`    | Quien preguntó    | Tras `get_shelf_adjacent`         |
+| `current_time(Millis)`                   | Quien preguntó    | Tras `get_time`                   |
 | `total_errors(ErrorType, GlobalTotal)`   | Supervisor        | Cada vez que se acumula un error  |
 
 ### 3.3 Hilos y concurrencia del entorno

@@ -199,6 +199,9 @@ public class WarehouseArtifact extends Environment {
                 case "log_event":
                     return executeLogEvent(agName, action);
 
+                case "get_time":
+                    return executeGetTime(agName, action);
+
                 default:
                     System.err.println("Unknown action: " + actionName);
                     return false;
@@ -612,6 +615,20 @@ public class WarehouseArtifact extends Environment {
                 System.err.println("No se pudo escribir en " + eventLogPath + ": " + e.getMessage());
             }
         }
+        return true;
+    }
+
+    /**
+     * Acción: get_time. Publica al agente llamante el percept
+     * current_time(Millis) con el reloj del sistema en milisegundos. Siguiendo
+     * el patrón de get_container_info / get_shelf_adjacent: la acción es
+     * "tonta" y el agente consulta el percept con ?current_time(T) en la
+     * siguiente acción de su plan.
+     */
+    private boolean executeGetTime(String agName, Structure action) {
+        long now = System.currentTimeMillis();
+        removePerceptsByUnif(agName, Literal.parseLiteral("current_time(_)"));
+        addPercept(agName, Literal.parseLiteral("current_time(" + now + ")"));
         return true;
     }
 
