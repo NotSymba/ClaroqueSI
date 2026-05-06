@@ -949,6 +949,11 @@ owned_dim(CId, Shelf, W, V) :- delegated_stored(CId, Shelf, W, V).
 //      quedarse sin trabajo.
 //    · Si A acepta y P ya no tiene el CId (porque arrancó execute_exit
 //      en paralelo) → P deniega y A cae al fallback limpio.
+//    · P prioriza al solicitante MÁS PESADO al que pueda servir: tras
+//      una ventana corta de acumulación, compara los MaxW recibidos y
+//      ofrece sólo al de mayor MaxW con match. Los demás caen a su
+//      fallback y podrán reintentar en la siguiente ronda. La intuición
+//      es que el más capaz drena paquetes más pesados por transferencia.
 // ═════════════════════════════════════════════════════════════
 
 // ─── Lado A: pedir ayuda ───────────────────────────────────────
@@ -1019,17 +1024,40 @@ owned_dim(CId, Shelf, W, V) :- delegated_stored(CId, Shelf, W, V).
 +!offer_distance(_, _, _, 999998).
 
 // ─── Lado P: responder ofertas y compromiso ────────────────────
-// Recibo solicitud: si tengo algún my_stored del deadline activo que
-// el solicitante pueda cargar, le ofrezco UNO (no comprometo varios).
-+help_request(Asker, MaxW)[source(Asker)] <-
-    -help_request(Asker, MaxW)[source(Asker)];
-    !find_offerable(MaxW, Offer);
-    !maybe_offer(Asker, Offer).
+// Acumulo solicitudes durante una ventana corta y respondo SOLO al
+// solicitante con mayor max_weight al que pueda servir. Razonamiento:
+// el más capaz se lleva paquetes más pesados, drena más carga por ronda
+// y los solicitantes menos capaces pueden reintentar en la siguiente.
+// El asker A espera 800ms a recibir ofertas; nuestra ventana de 300ms
+// encaja con margen.
++help_request(Asker, MaxW)[source(Asker)] : not evaluating_help_requests <-
+    +evaluating_help_requests;
+    .wait(300);
+    .findall(req(A, MW), help_request(A, MW)[source(A)], Reqs);
+    .abolish(help_request(_, _)[source(_)]);
+    !pick_heaviest_servable(Reqs, none, -1, Best);
+    -evaluating_help_requests;
+    !respond_to_best(Best).
 
-+!maybe_offer(_, none).
-+!maybe_offer(Asker, of(CId, Shelf, W, V, Type)) <-
+// Las solicitudes que llegan durante la ventana quedan como creencias
+// y son recogidas por el .findall de arriba — no disparan otra ronda.
++help_request(_, _)[source(_)] : evaluating_help_requests.
+
+// Recorre las solicitudes y elige la del asker con mayor MaxW que tenga
+// algún my_stored servible. Empate de MaxW → primero en orden de llegada.
++!pick_heaviest_servable([], Cur, _, Cur).
++!pick_heaviest_servable([req(A, MW) | Rest], Cur, BestMW, Best) <-
+    !find_offerable(MW, Offer);
+    if (Offer \== none & MW > BestMW) {
+        !pick_heaviest_servable(Rest, sel(A, Offer), MW, Best)
+    } else {
+        !pick_heaviest_servable(Rest, Cur, BestMW, Best)
+    }.
+
++!respond_to_best(none).
++!respond_to_best(sel(Asker, of(CId, Shelf, W, V, Type))) <-
     .send(Asker, tell, help_offer(CId, Shelf, W, V, Type));
-    .print("HELP: ofrezco ", CId, " (", Shelf, ") a ", Asker).
+    .print("HELP: ofrezco ", CId, " (", Shelf, ") a ", Asker, " — solicitante más pesado servible").
 
 +!find_offerable(MaxW, Offer) <-
     .findall(of(CId, Shelf, W, V, Type),

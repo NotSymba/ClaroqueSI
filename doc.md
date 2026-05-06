@@ -912,6 +912,17 @@ A acepta la oferta más cercana. P solo cede el paquete en
 Si P ya no lo tiene → deny y A vuelve al fallback. `delegating(CId)`
 evita re-cesiones.
 
+**Prioridad por capacidad del solicitante (lado P):** P no responde
+inmediatamente al primer `help_request`. Abre una ventana de 300 ms
+(`evaluating_help_requests`), acumula todas las solicitudes que lleguen
+y al cierre elige al asker con mayor `MaxW` para el que tenga al menos
+un `my_stored` servible. Sólo emite `help_offer` al ganador; los demás
+solicitantes caen a su fallback y reintentarán en la siguiente ronda.
+La intuición: el peer más capaz se lleva paquetes más pesados, así que
+cada transferencia drena más kg. Empate de `MaxW` (heavy ↔ heavy2) →
+primero en orden de llegada. La ventana de 300 ms encaja con margen
+dentro de los 800 ms que A espera por ofertas.
+
 **Caso límite — `force_exit_carried`:**
 ```jason
 +!force_exit_carried(CId, Type) <-
@@ -1386,10 +1397,17 @@ heavies; light pregunta:
 
 ```
 light  → heavy/heavy2/medium:  tell help_request(robot_light, 10)
+heavy:  +help_request(...) → +evaluating_help_requests; .wait(300)
+                              (acumula otros help_request si llegan)
+heavy:  pick_heaviest_servable
+        → si en la ventana llegó también medium (MaxW=30) y heavy
+          tiene un my_stored servible para él, ofrece a medium, NO
+          a light. Sólo si light es el de mayor MaxW servible (o el
+          único), heavy le ofrece.
 heavy  → light:                tell help_offer(c_4, shelf_2, 8, 1, standard)
                               (de su my_stored, que light puede cargar)
-                              (espera 800 ms para juntar ofertas)
-light:  pick_closest_offer (Manhattan a la shelf de cada oferta)
+light:  espera 800 ms para juntar ofertas; pick_closest_offer
+        (Manhattan a la shelf de cada oferta)
 light  → heavy:               achieve help_take(robot_light, c_4)
 
 heavy:  +help_take(...) [my_stored(c_4, shelf_2, 8, 1) & not delegating(c_4)] →
@@ -1880,6 +1898,14 @@ si pasaron átomo, pero internamente todo es átomo.
 alternativa con `.wait({+help_offer(...)}, 800, _)` solo capturaría
 la primera oferta. Con timeout fijo se recogen todas y se elige
 la mejor.
+
+**Ventana simétrica de 300 ms en el lado P**: el helper también
+acumula `help_request` durante 300 ms antes de decidir a quién
+ofrecer, para poder priorizar al solicitante con mayor `MaxW` que
+pueda servir (regla "más pesado primero", §5.2.5). 300 ms encaja
+con margen en la ventana de 800 ms del lado A. Misma razón que
+arriba: sin OR en `.wait`, se usa timeout fijo para juntar varias
+solicitudes y comparar capacidades.
 
 ### 7.9 `pending_drop` sobrevive a la purga de reservas
 
