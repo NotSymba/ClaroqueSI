@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls \"\\\\\\\\\\\\\\\\wsl.localhost\\\\\\\\Ubuntu-24.04\\\\\\\\home\\\\\\\\user\\\\\\\\escuela\\\\\\\\SI\\\\\\\\proyecto2\\\\\\\\ClaroqueSI\\\\\\\\warehouse\\\\\\\\src\\\\\\\\agt\\\\\\\\\")",
+      "Read(///wsl.localhost/Ubuntu-24.04/home/user/escuela/SI/proyecto2/ClaroqueSI/warehouse/src/**)",
+      "Read(//mnt/c/Users/**)",
+      "Bash(wc -l '\\\\\\\\wsl.localhost\\\\Ubuntu-24.04\\\\home\\\\user\\\\escuela\\\\SI\\\\proyecto2\\\\ClaroqueSI\\\\warehouse\\\\src\\\\agt\\\\'*.asl)",
+      "Bash(ls -la \"//wsl.localhost/Ubuntu-24.04/home/user/escuela/SI/proyecto2/ClaroqueSI/warehouse/src/agt/\")",
+      "Bash(ls \"//wsl.localhost/Ubuntu-24.04/home/user/escuela/SI/proyecto2/ClaroqueSI/diagramas/\" \"//wsl.localhost/Ubuntu-24.04/home/user/escuela/SI/proyecto2/ClaroqueSI/warehouse/src/agt/\")",
+      "Read(///wsl.localhost/Ubuntu-24.04/home/user/escuela/SI/proyecto2/ClaroqueSI/**)"
+    ]
+  }
+}
