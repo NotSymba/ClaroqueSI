@@ -20,17 +20,11 @@ public class WarehouseArtifact extends Environment {
     private ExecutorService containerGeneratorExecutor;
     private volatile boolean running = true;
 
-    // Tipos cuya generación está bloqueada (durante un ciclo de salida).
-    // El scheduler controla este set con las acciones block_generation /
-    // unblock_generation. Usamos un set concurrente porque el loop del
-    // generador corre en hilo dedicado y las acciones las invocan agentes.
+    // Set concurrente porque lo escriben los agentes (block/unblock) y lo lee
+    // el hilo del generador.
     private final java.util.Set<String> blockedGenerationTypes
             = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
-    // Ruta absoluta a warehouse/eventlog.txt. Resuelta en init() buscando el
-    // directorio que contiene warehouse.mas2j desde el CWD; así la traza cae
-    // siempre en el mismo sitio independientemente de desde dónde arranque la
-    // JVM (./gradlew run, jason warehouse.mas2j, java -jar shadow.jar...).
     private java.nio.file.Path eventLogPath;
 
     @Override
@@ -50,8 +44,6 @@ public class WarehouseArtifact extends Environment {
         view.logMessage("========================================");
         view.logMessage("");
 
-        // Resolvemos warehouse/eventlog.txt y truncamos para empezar limpio
-        // en cada ejecución. Si el fichero no existe lo creamos vacío.
         eventLogPath = resolveEventLogPath();
         try {
             java.nio.file.Path parent = eventLogPath.getParent();
@@ -72,9 +64,6 @@ public class WarehouseArtifact extends Environment {
         Runtime.getRuntime().addShutdownHook(new Thread(this::stop));
     }
 
-    // -------------------------------------------------------------------------
-    // GENERADOR DE CONTENEDORES
-    // -------------------------------------------------------------------------
     private void startContainerGenerator() {
         containerGeneratorExecutor = Executors.newSingleThreadExecutor(r -> {
             Thread t = new Thread(r, "ContainerGenerator");
@@ -86,8 +75,8 @@ public class WarehouseArtifact extends Environment {
             Random rand = new Random();
             while (running) {
                 try {
-                    // Intervalo base 5-10s. Si hay algún tipo bloqueado (ciclo
-                    // de salida activo), lo duplicamos: 10-20s.
+                    // Si hay un grupo bloqueado (ciclo de salida activo) duplicamos
+                    // el intervalo para no saturar la entrada con el otro grupo.
                     long baseDelay = 5000 + rand.nextInt(5000);
                     long delay = blockedGenerationTypes.isEmpty()
                             ? baseDelay
@@ -100,8 +89,7 @@ public class WarehouseArtifact extends Environment {
 
                     Container container = model.newContainer(blockedGenerationTypes);
                     if (container == null) {
-                        // Si es por bloqueo total (los dos grupos de salida bloqueados),
-                        // no es un error — solo saltamos.
+                        // Bloqueo total no es error, solo pausa.
                         if (blockedGenerationTypes.contains("urgent")
                                 && blockedGenerationTypes.contains("normal")) {
                             System.out.println("Generador pausado: ambos grupos bloqueados");
@@ -117,7 +105,6 @@ public class WarehouseArtifact extends Environment {
                         view.update();
                     }
 
-                    // Notificar a scheduler y supervisor, reemplazando percepción anterior
                     updateOccupancy(container.getX(), container.getY(), true);
                     updateContainerAt(container.getId(), container.getX(), container.getY());
 
@@ -154,9 +141,6 @@ public class WarehouseArtifact extends Environment {
         System.out.println("Warehouse environment stopped");
     }
 
-    // -------------------------------------------------------------------------
-    // DISPATCH DE ACCIONES
-    // -------------------------------------------------------------------------
     @Override
     public boolean executeAction(String agName, Structure action) {
         try {
@@ -213,8 +197,7 @@ public class WarehouseArtifact extends Environment {
     }
 
     /**
-     * Acción: see() Percibe entorno cercano (radio 1) teniendo en cuenta
-     * objetos multi-celda.
+     * Percibe el entorno cercano (radio Manhattan 1) del robot.
      */
     private boolean executeSee(String agName, Structure action) {
 
@@ -228,7 +211,6 @@ public class WarehouseArtifact extends Environment {
 
         CellType[][] grid = model.getGrid();
 
-        // Limpiar percepciones anteriores
         removePerceptsByUnif(agName, Literal.parseLiteral("shelf(_,_)"));
         removePerceptsByUnif(agName, Literal.parseLiteral("robot(_,_,_)"));
         removePerceptsByUnif(agName, Literal.parseLiteral("container(_,_,_)"));
@@ -236,9 +218,6 @@ public class WarehouseArtifact extends Environment {
         addPercept(agName, Literal.parseLiteral(
                 "at(" + agName + "," + rx + "," + ry + ")"
         ));
-        //─────────────────────────────────────────
-        //  VER CELDAS ALREDEDOR (radio Manhattan 1)
-        // ─────────────────────────────────────────
         for (int dx = -1; dx <= 1; dx++) {
             for (int dy = -1; dy <= 1; dy++) {
 
@@ -249,21 +228,17 @@ public class WarehouseArtifact extends Environment {
                 int x = rx + dx;
                 int y = ry + dy;
 
-                // límites
                 if (x < 0 || x >= GRID_WIDTH || y < 0 || y >= GRID_HEIGHT) {
                     continue;
                 }
 
-                // ───────── SHELVES (MULTI-CELDA) ─────────
                 if (grid[x][y] == CellType.SHELF) {
                     addPercept(agName, Literal.parseLiteral(
                             "shelf(" + x + "," + y + ")"
                     ));
                 }
 
-                // ───────── CONTAINERS ─────────
                 if (grid[x][y] == CellType.PACKAGE) {
-                    // buscar qué contenedor está ahí
                     for (Container c : model.getContainers().values()) {
                         if (!c.isPicked() && c.getX() == x && c.getY() == y) {
                             addPercept(agName, Literal.parseLiteral(
@@ -276,7 +251,6 @@ public class WarehouseArtifact extends Environment {
             }
         }
 
-        // ───────── ROBOTS ─────────
         for (Robot r : model.getRobots().values()) {
             if (r.getId().equals(agName)) {
                 continue;
@@ -301,11 +275,9 @@ public class WarehouseArtifact extends Environment {
             String destination = action.getTerm(0).toString() + "," + action.getTerm(1).toString();
 
             if (error == 0) {
-                // El paso físico funcionó. Comprobamos si la celda destino tenía
-                // un paquete sin recoger: en ese caso lo destruimos, notificamos
-                // a todos los agentes para que limpien referencias y devolvemos
-                // ÉXITO igualmente — el robot se ha movido y no debe perder la
-                // intención de seguir navegando por un splash accidental.
+                // El paso siempre se considera ÉXITO aunque hayamos aplastado un
+                // paquete: el robot ya se movió y no debe perder su intención de
+                // navegación por un splash accidental.
                 Container crushed = model.escacharPaquete(agName);
                 if (crushed != null) {
                     broadcastContainerDestroyed(crushed);
@@ -331,16 +303,14 @@ public class WarehouseArtifact extends Environment {
     }
 
     /**
-     * Notifica la destrucción de un contenedor a TODOS los agentes (scheduler,
-     * supervisor y los 4 robots) y limpia las percepciones asociadas en el
-     * scheduler (container_at, occupied). Cada agente reaccionará a
-     * container_destroyed/2 para purgar sus colas, reservas y referencias.
+     * Notifica la destrucción de un contenedor a todos los agentes y limpia las
+     * percepciones asociadas. Cada agente reaccionará a container_destroyed/2
+     * para purgar sus colas, reservas y referencias.
      */
     private void broadcastContainerDestroyed(Container c) {
         String cid = c.getId();
         String tagsList = c.getTagsAsAslList();
 
-        // Percepciones que el env mantenía sobre el contenedor
         removePerceptsByUnif("scheduler",
                 Literal.parseLiteral("container_at(" + cid + ",_,_)"));
         updateOccupancy(c.getX(), c.getY(), false);
@@ -350,10 +320,6 @@ public class WarehouseArtifact extends Environment {
 
     }
 
-    /**
-     * Acción: pickup(ContainerId) Recoge un contenedor desde la zona de
-     * clasificación.
-     */
     private boolean executePickup(String agName, Structure action) {
         String containerId = action.getTerm(0).toString().replace("\"", "");
         Container container = model.getContainers().get(containerId);
@@ -378,10 +344,6 @@ public class WarehouseArtifact extends Environment {
         return false;
     }
 
-    /**
-     * Acción: relocate_container(ContainerId, DestX, DestY) Mueve un paquete a
-     * una celda libre de clasificación. El scheduler decide el destino.
-     */
     private boolean executeRelocateContainer(String agName, Structure action) {
         String containerId = action.getTerm(0).toString().replace("\"", "");
         int srcX = -1, srcY = -1;
@@ -399,8 +361,8 @@ public class WarehouseArtifact extends Environment {
             if (container != null) {
                 updateOccupancy(container.getX(), container.getY(), true);
                 updateContainerAt(containerId, container.getX(), container.getY());
-                // Invalidar beliefs location/3 obsoletos y notificar a los
-                // robots para que cualquier plan en curso se replantee.
+                // Invalidar location/3 obsoletos para que los planes en curso
+                // se replanteen tras la reubicación.
                 for (String robotName : model.getRobots().keySet()) {
                     removePerceptsByUnif(robotName,
                             Literal.parseLiteral("location(" + containerId + ",_,_)"));
@@ -426,10 +388,6 @@ public class WarehouseArtifact extends Environment {
         return false;
     }
 
-    /**
-     * Acción: drop_at(ShelfId) Deposita el contenedor que lleva el robot en una
-     * estantería adyacente.
-     */
     private boolean executeDropAt(String agName, Structure action) {
         String shelfId = action.getTerm(0).toString().replace("\"", "");
         int error = model.dropContainer(agName, action);

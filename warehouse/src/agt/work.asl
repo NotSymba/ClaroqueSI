@@ -28,6 +28,17 @@ state(idle).
 container_queue([]).
 
 // ─────────────────────────────────────────────────────────────
+//  TRAZA DE ESTADOS → SUPERVISOR
+//  Cualquier transición state(X) (vía +state, -+state) dispara este
+//  plan, que reporta el nuevo estado al supervisor para que lo
+//  añada a la traza histórica del robot. La creencia inicial
+//  state(idle) NO dispara evento; la traza arranca con la primera
+//  transición real (típicamente busy al recibir el primer paquete).
+// ─────────────────────────────────────────────────────────────
++state(NewState) <-
+    .send(supervisor, tell, robot_status(NewState)).
+
+// ─────────────────────────────────────────────────────────────
 //  REGLAS PARA TAGS
 // ─────────────────────────────────────────────────────────────
 is_urgent_pkg(Tags)  :- .member(urgent,  Tags).
@@ -436,6 +447,7 @@ shelf_usage_local(shelf_9, 0, 0).
     !go_to_exit_cell(EX, EY);
     drop_at_exit(EX, EY);
     log_event(container_delivered, CId);
+    .my_name(MeEv); .print("EVENT | agent=", MeEv, " | type=container_delivered | data=", CId);
     !unmark_fragile;
     .send(scheduler, tell, force_exit_cycle(Tags));
     .print("Caso límite: ", CId, " entregado a la salida y ciclo solicitado (tags=", Tags, ").").
@@ -530,6 +542,7 @@ shelf_usage_local(shelf_9, 0, 0).
     !go_to_exit_cell(EX, EY);
     drop_at_exit(EX, EY);
     log_event(container_delivered, CId);
+    .my_name(MeEv); .print("EVENT | agent=", MeEv, " | type=container_delivered | data=", CId);
     !unmark_fragile;
     .print("Recuperación: ", CId, " entregado en la salida").
 +!recover_carrying.
@@ -831,6 +844,7 @@ owned_dim(CId, Shelf, W, V) :- delegated_stored(CId, Shelf, W, V).
         } else {
             drop_at_exit(EX, EY);
             log_event(container_delivered, CId);
+            .my_name(MeEv); .print("EVENT | agent=", MeEv, " | type=container_delivered | data=", CId);
             !unmark_fragile;
             .abolish(carrying_exit(CId, _, _, _, _));
             .send(scheduler, tell, exit_done(CId, Tags));
@@ -860,6 +874,7 @@ owned_dim(CId, Shelf, W, V) :- delegated_stored(CId, Shelf, W, V).
         } else {
             drop_at_exit(EX, EY);
             log_event(container_delivered, CId);
+            .my_name(MeEv); .print("EVENT | agent=", MeEv, " | type=container_delivered | data=", CId);
             !unmark_fragile;
             .abolish(carrying_exit(CId, _, _, _, _));
             .send(scheduler, tell, exit_done(CId, Tags));

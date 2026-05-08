@@ -399,6 +399,7 @@ pending_queue([]).
     .send(supervisor, tell, exit_cycle_started);
     .print("Scheduler: T0 — INICIO ciclo de salida (grupo=", Group, ")");
     log_event(output_phase_started, Group);
+    .print("EVENT | agent=scheduler | type=output_phase_started | data=", Group);
     !run_deadline_for(Group);
     !end_exit_cycle(Group).
 
@@ -440,6 +441,7 @@ pending_queue([]).
     +active_deadline(Kind);
     +deadline_shipped_count(Kind, 0);
     log_event(deadline_started, Group);
+    .print("EVENT | agent=scheduler | type=deadline_started | data=", Group);
     .send(transport, tell, load_start(Kind, Group));
     // Supervisor arranca su propia vigilancia temporal del deadline.
     .send(supervisor, tell, deadline_started(Kind, Group, Duration));
@@ -456,6 +458,7 @@ pending_queue([]).
     ?deadline_shipped_count(Kind, N);
     -deadline_shipped_count(Kind, _);
     log_event(deadline_ended, Group);
+    .print("EVENT | agent=scheduler | type=deadline_ended | data=", Group);
     .send(transport, tell, load_end(Kind, N));
     !broadcast_deadline_end(Kind);
     !abolish_all_exit_items(Kind).

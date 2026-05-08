@@ -46,9 +46,7 @@ public class Robot {
     // Setters
     public void setPosition(int x, int y) { this.x = x; this.y = y; }
     public void setCurrentTask(String task) { this.currentTask = task; }
-    
-    //get y modify del tiempo, esto es para el algoritmo de planificacion de ruta...
- 
+     
     /**
      * Verifica si el robot puede cargar un contenedor 
      */
@@ -91,7 +89,6 @@ public class Robot {
     }
     
     /**
-     * Se viene A* chato, así que esto sera util
      * Calcula la distancia Manhattan a un punto
      */
     public int distanceTo(int targetX, int targetY) {

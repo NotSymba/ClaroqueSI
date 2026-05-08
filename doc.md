@@ -466,6 +466,11 @@ saturación** agregada para avisar al scheduler.
 6. **`list_stored(Group, Kind)`**: contestar al scheduler con la
    lista de `s(CId, Shelf, W, V, Tags)` de los `stored_at` cuyo
    grupo coincida con el solicitado.
+7. **Traza de estados de los robots**: cada robot reporta sus
+   transiciones de `state/1` con `robot_status(NewState)`. El
+   supervisor mantiene `status_of(Robot, State)` (estado actual)
+   y `state_trace(Robot, [S1, S2, ...])` (histórico cronológico),
+   apto para depuración o reconstrucción del recorrido del robot.
 
 #### Planes principales
 
@@ -567,6 +572,48 @@ El supervisor es la **fuente de verdad** dentro del MAS para los
 depósitos confirmados. Los robots reciben el snapshot y reemplazan
 su `shelf_usage_local`; las reservas locales (`shelf_reservation`)
 no se tocan: son creencias propias sobre operaciones en vuelo.
+
+##### Traza de estados de los robots
+
+Cada robot tiene una creencia `state/1` que vale `idle`, `going_idle`
+o `busy`. En `work.asl` un único plan captura cualquier transición
+(activado tanto por `+state(X)` como por `-+state(X)`):
+
+```jason
++state(NewState) <-
+    .send(supervisor, tell, robot_status(NewState)).
+```
+
+Como la creencia inicial `state(idle).` se inyecta en el arranque del
+agente y no dispara evento de adición, la traza arranca con la primera
+transición real (típicamente `busy` al recibir el primer contenedor).
+
+En el supervisor, el handler mantiene **estado actual** y **traza
+histórica**:
+
+```jason
++robot_status(State)[source(Robot)] <-
+    .abolish(status_of(Robot, _));
+    +status_of(Robot, State);
+    !append_state_trace(Robot, State);
+    ?state_trace(Robot, Trace);
+    .print("Monitor: El robot ", Robot, " ha cambiado su estado a ", State,
+           " | traza=", Trace);
+    -robot_status(State)[source(Robot)].
+
++!append_state_trace(Robot, State) : state_trace(Robot, L) <-
+    .concat(L, [State], NewL);
+    -state_trace(Robot, L);
+    +state_trace(Robot, NewL).
+
++!append_state_trace(Robot, State) <-
+    +state_trace(Robot, [State]).
+```
+
+Hay una creencia `state_trace/2` por robot, con la lista cronológica
+de estados por los que ha pasado (sin deduplicación: si el robot
+oscila idle→busy→idle, los tres aparecen en orden). Útil para
+auditar comportamiento sin tocar el log de eventos.
 
 ##### Vigilancia temporal del deadline (detección periódica con reloj real)
 

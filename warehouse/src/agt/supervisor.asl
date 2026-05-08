@@ -202,6 +202,7 @@ snapshot_period_ms(15000).
         .print("Supervisor: grupo ", Group, " al ", UW, "/", MW, "kg (", UV, "/", MV, "u³) ≥ ",
                R*100, "% — avisando scheduler con no_space(", Group, ")");
         log_event(no_space_detected, Group);
+        .print("EVENT | agent=supervisor | type=no_space_detected | data=", Group);
         .send(scheduler, tell, no_space(Group))
     }.
 
@@ -333,11 +334,24 @@ snapshot_period_ms(15000).
     .print("--- ESTADÍSTICAS GLOBALES ---");
     .print("Recibidos: ", R, " | Almacenados: ", S, " | Tasa de éxito: ", SuccessRate, "%").
 
+/* Cada robot reporta sus transiciones de state/1; el supervisor mantiene
+ * status_of(Robot, State) (estado actual) y state_trace(Robot, L) (lista
+ * cronológica de estados por los que ha pasado ese robot). */
 +robot_status(State)[source(Robot)] <-
     .abolish(status_of(Robot, _));
     +status_of(Robot, State);
-    .print("Monitor: El robot ", Robot, " ha cambiado su estado a ", State);
+    !append_state_trace(Robot, State);
+    ?state_trace(Robot, Trace);
+    .print("Monitor: El robot ", Robot, " ha cambiado su estado a ", State, " | traza=", Trace);
     -robot_status(State)[source(Robot)].
+
++!append_state_trace(Robot, State) : state_trace(Robot, L) <-
+    .concat(L, [State], NewL);
+    -state_trace(Robot, L);
+    +state_trace(Robot, NewL).
+
++!append_state_trace(Robot, State) <-
+    +state_trace(Robot, [State]).
 
 @total_errors_update[atomic]
 +total_errors(ErrorType, GlobalTotal) <-
@@ -450,6 +464,7 @@ snapshot_period_ms(15000).
 +!emit_deadline_missed_each([]).
 +!emit_deadline_missed_each([p(CId, _) | Rest]) <-
     log_event(deadline_missed, CId);
+    .print("EVENT | agent=supervisor | type=deadline_missed | data=", CId);
     !emit_deadline_missed_each(Rest).
 
 /* Limpieza: cuando el scheduler cierra el ciclo del grupo, retiramos las
