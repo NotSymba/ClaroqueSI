@@ -1,62 +1,26 @@
-+!start : true <-
-    .print("Robot iniciado y listo").
+{ include("mov.asl") }
+{ include("work.asl") }
 
+idlezone(3,3).
+max_weight(10).
+max_size(1, 1).
 
-+!handle_container(CId)[source(scheduler)] : true <-
-    .print("Recibida orden del scheduler. Solicitando tarea al entorno para: ", CId);
-    assignTask(CId).
+timePerMove(100).
+priority(1).  // Más alta: el más rápido tiene preferencia de paso
 
+// Prioridad propia de shelves para contenedores regulares (standard + fragile).
+// Los urgentes siempre van a la urgent más cercana (ver pick_shelf_regular).
+robot_shelf_priority([shelf_2, shelf_3, shelf_4, shelf_6, shelf_7, shelf_9]).
 
-+task(CId, ShelfId) : true <-
-    -task(CId, ShelfId);
-    .print("El entorno asignó la ruta: ", CId, " -> ", ShelfId);
-    
+can_i_manage(W, H, Weight) :-
+    max_weight(MaxWeight) &
+    max_size(MaxW, MaxH) &
+    Weight <= MaxWeight &
+    W <= MaxW &
+    H <= MaxH.
 
-    !go_to(CId);
-    .wait(1000);
+!start.
 
-    pickup(CId);
-    .print("Contenedor ", CId, " recogido físicamente.");
-    .wait(1000);
-
-    !deliver_container(CId, ShelfId).
-
-+!deliver_container(CId, ShelfId) : true <-
-
-    !go_to(ShelfId);
-    .wait(1000);
-
-    drop_at(ShelfId);
-    
-    .print("Contenedor depositado con éxito en ", ShelfId);
-
-
-    taskcomplete(CId, ShelfId); 
-    .print("Tarea marcada como completada en el sistema.");
-
-
-    !go_to(lightInit);
-
-    .send(scheduler, achieve, taskcomplete(CId, ShelfId));
-    .send(supervisor, tell, container_stored(CId, ShelfId)).
-
--!deliver_container(CId, ShelfId) : true <-
-    .print("¡Error! No se pudo depositar en ", ShelfId, ". Solicitando nueva estantería al entorno...");
-    get_free_shelf(CId). 
-
-+free_shelf(CId, NewShelf) : true <-
-    -free_shelf(CId, NewShelf);
-
-    .print("Nueva estantería alternativa recibida: ", NewShelf, ". Reintentando entrega...");
-    !deliver_container(CId, NewShelf).
-
-
-+!go_to(Location) : .my_name(X) & not at(X,Location) <-
-    move_to(Location);
-    .wait(75);
-    !go_to(Location).
-
-+!go_to(Location) : at(X,Location) <-
-    .print("Posición alcanzada: ", Location);
-    +state(idle);
-    .send(supervisor, tell, robot_status(idle)).
++!start <-
+    .print("Robot light online. Esperando contenedores...");
+    see.

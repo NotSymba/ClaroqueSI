@@ -1,0 +1,6 @@
+# Gradle
+.cloude/
+.gradle/
+build/
+CLAUDE.md 
+eventlog.txt

@@ -1,62 +1,33 @@
-+!start : true <-
-    .print("Robot iniciado y listo").
+{ include("mov.asl") }
+{ include("work.asl") }
 
+idlezone(4,3).
+max_weight(30).
+max_size(1, 2).
 
-+!handle_container(CId)[source(scheduler)] : true <-
-    .print("Recibida orden del scheduler. Solicitando tarea al entorno para: ", CId);
-    assignTask(CId).
+timePerMove(200).
+priority(2).
 
+robot_shelf_priority([shelf_6, shelf_7, shelf_2, shelf_3, shelf_4, shelf_9]).
 
-+task(CId, ShelfId) : true <-
-    -task(CId, ShelfId);
-    .print("El entorno asignó la ruta: ", CId, " -> ", ShelfId);
-    
+// can_i_manage usa SOLO los topes propios. La regla "el más rápido capaz
+// se queda con el paquete" se aplica en work.asl (+container_available)
+// vía la guarda `not faster_capable`. Aquí declaramos que LIGHT (más
+// rápido que medium) puede gestionar cualquier paquete que quepa en su
+// capacidad propia (W<=1 & H<=1 & Weight<=10): si encaja ahí, medium se
+// abstiene.
+can_i_manage(W, H, Weight) :-
+    max_weight(MaxWeight) &
+    max_size(MaxW, MaxH) &
+    Weight <= MaxWeight &
+    W <= MaxW &
+    H <= MaxH.
 
-    !go_to(CId);
-    .wait(1500);
+faster_capable(W, H, Weight) :-
+    W <= 1 & H <= 1 & Weight <= 10.
 
-    pickup(CId);
-    .print("Contenedor ", CId, " recogido físicamente.");
-    .wait(1500);
+!start.
 
-    !deliver_container(CId, ShelfId).
-
-+!deliver_container(CId, ShelfId) : true <-
-
-    !go_to(ShelfId);
-    .wait(1500);
-
-    drop_at(ShelfId);
-    
-    .print("Contenedor depositado con éxito en ", ShelfId);
-
-
-    taskcomplete(CId, ShelfId); 
-    .print("Tarea marcada como completada en el sistema.");
-
-
-    !go_to(mediumInit);
-
-    .send(scheduler, achieve, taskcomplete(CId, ShelfId));
-    .send(supervisor, tell, container_stored(CId, ShelfId)).
-
--!deliver_container(CId, ShelfId) : true <-
-    .print("¡Error! No se pudo depositar en ", ShelfId, ". Solicitando nueva estantería al entorno...");
-    get_free_shelf(CId). 
-
-+free_shelf(CId, NewShelf) : true <-
-    -free_shelf(CId, NewShelf);
-
-    .print("Nueva estantería alternativa recibida: ", NewShelf, ". Reintentando entrega...");
-    !deliver_container(CId, NewShelf).
-
-
-+!go_to(Location) : .my_name(X) & not at(X,Location) <-
-    move_to(Location);
-    .wait(225);
-    !go_to(Location).
-
-+!go_to(Location) : at(X,Location) <-
-    .print("Posición alcanzada: ", Location);
-    +state(idle);
-    .send(supervisor, tell, robot_status(idle)).
++!start <-
+    .print("Robot medium online. Esperando contenedores...");
+    see.

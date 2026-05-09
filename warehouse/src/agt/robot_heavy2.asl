@@ -1,30 +1,28 @@
 { include("mov.asl") }
 { include("work.asl") }
 
-idlezone(5,3).
+idlezone(6,3).
 max_weight(100).
 max_size(2, 3).
 
 timePerMove(500).
-priority(3).  // Más baja: cede el paso a los demás
+priority(3).
 
-robot_shelf_priority([shelf_9, shelf_6, shelf_7, shelf_2, shelf_3, shelf_4]).
+// Prioridad propia: heavy2 prefiere el flanco DERECHO del almacén
+// (shelves con x mayor) para repartir físicamente la carga con heavy,
+// que prefiere el flanco izquierdo. shelf_9 sigue primero por ser la
+// más lejana (y la de mayor capacidad).
+robot_shelf_priority([shelf_9, shelf_7, shelf_6, shelf_4, shelf_3, shelf_2]).
 
-// Flag compartido con heavy2: las guardas `not is_router_robot` de
-// work.asl impiden que el plan genérico de container_available dispare
-// aquí. En su lugar se ejecuta el plan simétrico decide_heavy_peer
-// definido más abajo (duplicado intencionalmente entre robot_heavy.asl
-// y robot_heavy2.asl), que consulta al peer y decide quién encola según
-// cola de pendientes + estado (idle/going_idle/busy), con desempate por
-// nombre a favor de robot_heavy.
+// Peer simétrico de robot_heavy: ambos reciben container_available del
+// scheduler y ejecutan decide_heavy_peer (definido más abajo, duplicado
+// también en robot_heavy.asl). La coordinación es bilateral — ningún
+// robot "manda", se ponen de acuerdo por carga actual.
 is_router_robot.
 
-// can_i_manage usa solo los topes propios. La regla "el más rápido capaz
-// se queda" la aplica work.asl con `not faster_capable`. faster_capable
-// declara que MEDIUM (más rápido que heavy) puede gestionar el paquete:
-// si encaja en la capacidad de medium (W<=1 & H<=2 & Weight<=30) los
-// heavy se abstienen. Si la guarda falla y el paquete sigue siendo
-// manejable por heavy, decide_heavy_peer reparte entre heavy y heavy2.
+// Idéntico a robot_heavy: si medium puede con el paquete, los heavy se
+// abstienen. Si no, decide_heavy_peer reparte entre los dos heavy según
+// cola y estado.
 can_i_manage(W, H, Weight) :-
     max_weight(MaxWeight) &
     max_size(MaxW, MaxH) &
@@ -38,7 +36,7 @@ faster_capable(W, H, Weight) :-
 !start.
 
 +!start <-
-    .print("Robot heavy online. Coordinando con robot_heavy2 (simétrico)...");
+    .print("Robot heavy2 online. Coordinando con robot_heavy (simétrico)...");
     see.
 
 // ═════════════════════════════════════════════════════════════
@@ -47,7 +45,7 @@ faster_capable(W, H, Weight) :-
 // Bloque DUPLICADO entre robot_heavy.asl y robot_heavy2.asl (ambos
 // llevan `is_router_robot`, así que las guardas `not is_router_robot`
 // de work.asl evitan que sus planes genéricos disparen). Cualquier
-// cambio aquí debe replicarse en robot_heavy2.asl.
+// cambio aquí debe replicarse en robot_heavy.asl.
 //
 // El scheduler anuncia container_available a AMBOS heavy. Cada uno
 // consulta al peer su estado y aplica la MISMA regla determinista:
